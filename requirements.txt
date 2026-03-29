@@ -1,0 +1,7 @@
+chromadb-client
+python-dotenv
+psycopg[binary]
+sqlalchemy
+pypdf
+pytesseract
+Pillow

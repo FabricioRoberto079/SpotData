@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: spotdata-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-spotdata}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spotdata123}
+      POSTGRES_DB: ${POSTGRES_DB:-spotdata}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    container_name: spotdata-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+
+volumes:
+  postgres_data:
+  chroma_data:
