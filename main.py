@@ -1,33 +1,38 @@
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.Data.postgres_client import engine, Base
-from src.Enums.content_type import ContentType
-from src.Models.spot import Spot
-from src.Services.vector_service import insert, search
+from fastapi import FastAPI
+
+from src.Controller.document_controller import router as document_router
+from src.Data.postgres_client import engine
+from src.Models import Base
 
 
-def main():
-    # Cria as tabelas no Postgres (se não existirem)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    yield
 
-    # Exemplo: inserir um PDF
-    # doc_id = insert("caminho/do/arquivo.pdf", content_type=ContentType.PDF, source_name="contrato.pdf")
 
-    # Exemplo: inserir uma foto (OCR)
-    # doc_id = insert("caminho/da/foto.png", content_type=ContentType.FOTO, source_name="nota-fiscal.png")
+app = FastAPI(
+    title="SpotData API",
+    description="Ingestao e busca semantica de documentos (texto, imagem, PDF)",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
-    # Exemplo: inserir texto puro
-    # doc_id = insert("caminho/do/texto.txt", content_type=ContentType.TEXTO, source_name="anotacao.txt")
+app.include_router(document_router)
 
-    # Exemplo: buscar
-    results = search("onde está o contrato?")
-    for r in results:
-        print(f"[{r['distance']:.4f}] {r['source_name']} ({r['content_type']})")
-        print(f"  {r['document'][:200]}")
-        print()
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)

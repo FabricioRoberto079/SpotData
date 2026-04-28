@@ -5,7 +5,7 @@ from src.Data.chroma_client import get_chroma_client
 from src.Data.postgres_client import SessionLocal
 from src.Enums.content_type import ContentType
 from src.Models.spot import Spot
-from src.Services.text_extractor import extract_text
+from src.Services.text_extractor import extract_text, extract_text_from_bytes
 
 COLLECTION_NAME = "spots"
 
@@ -15,8 +15,47 @@ def _get_collection() -> Collection:
     return client.get_or_create_collection(name=COLLECTION_NAME)
 
 
+def _save_to_stores(
+    doc_id: str,
+    source_name: str,
+    content_type: ContentType,
+    file_data: bytes,
+    text: str,
+) -> str:
+    """Salva no Postgres e no ChromaDB."""
+    session = SessionLocal()
+    try:
+        spot = Spot(
+            id=doc_id,
+            source_name=source_name,
+            content_type=content_type,
+            file_data=file_data,
+            extracted_text=text,
+        )
+        session.add(spot)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    collection = _get_collection()
+    collection.upsert(
+        ids=[doc_id],
+        documents=[text],
+        metadatas=[{
+            "content_type": content_type,
+            "source": source_name,
+        }],
+    )
+
+    return doc_id
+
+
 def insert(file_path: str, content_type: ContentType, source_name: str | None = None) -> str:
     """
+    Insere a partir de um arquivo no disco.
     1. Extrai texto do arquivo
     2. Salva arquivo original + texto no Postgres
     3. Salva texto + embedding no ChromaDB (mesmo ID)
@@ -31,36 +70,27 @@ def insert(file_path: str, content_type: ContentType, source_name: str | None = 
     doc_id = str(uuid.uuid4())
     name = source_name or file_path
 
-    # Postgres — arquivo original + texto extraído
-    session = SessionLocal()
-    try:
-        spot = Spot(
-            id=doc_id,
-            source_name=name,
-            content_type=content_type,
-            file_data=file_data,
-            extracted_text=text,
-        )
-        session.add(spot)
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+    return _save_to_stores(doc_id, name, content_type, file_data, text)
 
-    # ChromaDB — texto + embedding para busca semântica
-    collection = _get_collection()
-    collection.upsert(
-        ids=[doc_id],
-        documents=[text],
-        metadatas=[{
-            "content_type": content_type,
-            "source": name,
-        }],
-    )
 
-    return doc_id
+def insert_from_bytes(
+    file_data: bytes,
+    content_type: ContentType,
+    source_name: str,
+) -> str:
+    """
+    Insere a partir de bytes (upload via API).
+    1. Extrai texto dos bytes
+    2. Salva bytes originais + texto no Postgres
+    3. Salva texto + embedding no ChromaDB (mesmo ID)
+    """
+    text = extract_text_from_bytes(file_data, content_type)
+    if not text:
+        raise ValueError("Nenhum texto extraído do conteúdo enviado.")
+
+    doc_id = str(uuid.uuid4())
+
+    return _save_to_stores(doc_id, source_name, content_type, file_data, text)
 
 
 def search(query: str, n_results: int = 3) -> list[dict]:

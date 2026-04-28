@@ -12,7 +12,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   chromadb:
-    image: chromadb/chroma:0.6.3
+    image: chromadb/chroma:1.5.7
     container_name: spotdata-chromadb
     ports:
       - "8000:8000"

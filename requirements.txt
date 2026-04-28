@@ -1,7 +1,13 @@
+alembic
 chromadb-client
+onnxruntime
+tokenizers
 python-dotenv
 psycopg[binary]
 sqlalchemy
 pypdf
 pytesseract
 Pillow
+fastapi
+uvicorn[standard]
+python-multipart
