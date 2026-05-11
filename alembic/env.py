@@ -4,26 +4,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import pool, create_engine
+from sqlalchemy import create_engine, pool
 
 from alembic import context
 
-from src.Data.postgres_client import get_database_url
-from src.Models.base_model import Base
+from src.data.postgres_client import get_database_url
+from src.models.base_model import Base
 
-# Importa todos os models para que o autogenerate os detecte
-from src.Models.User import User  # noqa: F401
-from src.Models.KnowledgeDocument import KnowledgeDocument  # noqa: F401
-from src.Models.Query import Query  # noqa: F401
-from src.Models.Response import Response  # noqa: F401
-from src.Models.EvidenceCitation import EvidenceCitation  # noqa: F401
-from src.Models.spot import Spot  # noqa: F401
+from src.models.user import User  # noqa: F401
+from src.models.document_folder import DocumentFolder  # noqa: F401
+from src.models.chat_folder import ChatFolder  # noqa: F401
+from src.models.knowledge_document import KnowledgeDocument  # noqa: F401
+from src.models.document_version import DocumentVersion  # noqa: F401
+from src.models.chat import Chat  # noqa: F401
+from src.models.query import Query  # noqa: F401
+from src.models.response import Response  # noqa: F401
+from src.models.evidence_citation import EvidenceCitation  # noqa: F401
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -31,7 +30,6 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
     url = get_database_url()
     context.configure(
         url=url,
@@ -45,7 +43,6 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
     connectable = create_engine(get_database_url(), poolclass=pool.NullPool)
 
     with connectable.connect() as connection:

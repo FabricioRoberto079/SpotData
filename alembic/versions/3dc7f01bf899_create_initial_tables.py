@@ -7,20 +7,17 @@ Create Date: 2026-03-31 17:43:51.054031
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 
-# revision identifiers, used by Alembic.
-revision: str = '3dc7f01bf899'
+revision: str = "3dc7f01bf899"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema."""
-    # users
     op.create_table(
         "users",
         sa.Column("id", sa.String(), primary_key=True),
@@ -32,7 +29,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("email"),
     )
 
-    # knowledge_documents
     op.create_table(
         "knowledge_documents",
         sa.Column("id", sa.String(), primary_key=True),
@@ -46,7 +42,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("file_hash"),
     )
 
-    # queries
     op.create_table(
         "queries",
         sa.Column("id", sa.String(), primary_key=True),
@@ -58,7 +53,6 @@ def upgrade() -> None:
         sa.Column("ocr_text", sa.Text(), nullable=True),
     )
 
-    # responses
     op.create_table(
         "responses",
         sa.Column("id", sa.String(), primary_key=True),
@@ -71,7 +65,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("query_id"),
     )
 
-    # evidence_citations
     op.create_table(
         "evidence_citations",
         sa.Column("id", sa.String(), primary_key=True),
@@ -84,7 +77,6 @@ def upgrade() -> None:
         sa.Column("confidence_score", sa.Float(), nullable=False),
     )
 
-    # spots
     op.create_table(
         "spots",
         sa.Column("id", sa.String(), primary_key=True),
@@ -98,7 +90,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Downgrade schema."""
     op.drop_table("evidence_citations")
     op.drop_table("responses")
     op.drop_table("queries")

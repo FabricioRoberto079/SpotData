@@ -3,13 +3,18 @@ services:
     image: postgres:16
     container_name: spotdata-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-spotdata}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spotdata123}
-      POSTGRES_DB: ${POSTGRES_DB:-spotdata}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB required}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   chromadb:
     image: chromadb/chroma:1.5.7
@@ -18,6 +23,44 @@ services:
       - "8000:8000"
     volumes:
       - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "cat < /dev/null > /dev/tcp/localhost/8000"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: .
+    container_name: spotdata-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB required}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:?LLM_CHAT_MODEL required}
+      LLM_STRUCTURED_MODEL: ${LLM_STRUCTURED_MODEL}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:?LLM_EMBEDDING_MODEL required}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:?JWT_ALGORITHM required}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:?JWT_EXPIRATION_MINUTES required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS required}
+      LOG_LEVEL: ${LOG_LEVEL:?LOG_LEVEL required}
+    ports:
+      - "8080:8080"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn main:app --host 0.0.0.0 --port 8080"
 
 volumes:
   postgres_data:
