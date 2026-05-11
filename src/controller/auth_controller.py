@@ -1,0 +1,53 @@
+from fastapi import APIRouter, Depends
+
+from src.integrations.auth import require_user
+from src.interfaces.auth_service import IAuthService
+from src.models.user import User
+from src.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
+from src.services.auth_service import get_auth_service
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    status_code=201,
+    summary="Register a user and return the token",
+)
+async def register(
+    payload: RegisterRequest,
+    auth_service: IAuthService = Depends(get_auth_service),
+):
+    return auth_service.register(
+        name=payload.name,
+        email=payload.email,
+        password=payload.password,
+        role=payload.role,
+    )
+
+
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    summary="Authenticate and return access_token",
+)
+async def login(
+    payload: LoginRequest,
+    auth_service: IAuthService = Depends(get_auth_service),
+):
+    return auth_service.login(email=payload.email, password=payload.password)
+
+
+@router.get(
+    "/me",
+    response_model=UserOut,
+    summary="Return the user from the current token",
+)
+async def me(current_user: User = Depends(require_user)):
+    return UserOut(
+        id=current_user.id,
+        name=current_user.name,
+        email=current_user.email,
+        role=current_user.role,
+    )
