@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
 from src.integrations.llm import LlmClient
+from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.base_model import Base
 
 
@@ -94,3 +95,20 @@ def fake_collection(monkeypatch):
 @pytest.fixture
 def fake_llm():
     return FakeLlm()
+
+
+class StubVectorIndex(IVectorIndexService):
+    def __init__(self, results=None) -> None:
+        self._results = results or []
+
+    def index_text(self, document_id, version_number, file_name, content_type, text):
+        return 0
+
+    def demote_latest(self, document_id):
+        pass
+
+    def purge_document(self, document_id):
+        pass
+
+    def search(self, query, n_results=5):
+        return self._results
