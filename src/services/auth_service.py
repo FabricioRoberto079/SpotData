@@ -9,18 +9,18 @@ from src.interfaces.auth_service import IAuthService
 from src.models.user import User
 
 
+def _user_out(user: User) -> dict:
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+    }
+
+
 class AuthService(IAuthService):
     def __init__(self, session: Session) -> None:
         self._session = session
-
-    @staticmethod
-    def _serialize(user: User) -> dict:
-        return {
-            "id": user.id,
-            "name": user.name,
-            "email": user.email,
-            "role": user.role,
-        }
 
     def register(
         self, name: str, email: str, password: str, role: str = "user"
@@ -46,13 +46,7 @@ class AuthService(IAuthService):
             self._session.rollback()
             raise
 
-        token, expires_in = issue_token(user)
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "expires_in": expires_in,
-            "user": self._serialize(user),
-        }
+        return _user_out(user)
 
     def login(self, email: str, password: str) -> dict:
         email_norm = email.strip().lower()
@@ -62,13 +56,8 @@ class AuthService(IAuthService):
         if user is None or not verify_password(password, user.password_hash):
             raise UnauthorizedError("Invalid email or password.")
 
-        token, expires_in = issue_token(user)
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "expires_in": expires_in,
-            "user": self._serialize(user),
-        }
+        token, _ = issue_token(user)
+        return {"access_token": token}
 
 
 def get_auth_service(session: Session = Depends(get_session)) -> IAuthService:
