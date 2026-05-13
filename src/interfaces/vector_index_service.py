@@ -3,13 +3,17 @@ from abc import ABC, abstractmethod
 
 class IVectorIndexService(ABC):
     @abstractmethod
-    def index_text(
+    def prepare(self, text: str) -> tuple[list[str], list[list[float]]]: ...
+
+    @abstractmethod
+    def commit(
         self,
         document_id: str,
         version_number: int,
         file_name: str,
         content_type: str,
-        text: str,
+        chunks: list[str],
+        embeddings: list[list[float]],
     ) -> int: ...
 
     @abstractmethod

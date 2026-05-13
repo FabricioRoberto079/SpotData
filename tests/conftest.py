@@ -101,8 +101,11 @@ class StubVectorIndex(IVectorIndexService):
     def __init__(self, results=None) -> None:
         self._results = results or []
 
-    def index_text(self, document_id, version_number, file_name, content_type, text):
-        return 0
+    def prepare(self, text):
+        return ([text], [[0.0] * 4])
+
+    def commit(self, document_id, version_number, file_name, content_type, chunks, embeddings):
+        return len(chunks)
 
     def demote_latest(self, document_id):
         pass

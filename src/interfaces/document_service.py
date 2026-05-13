@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from src.enums.content_type import ContentType
+from src.enums.document_category import DocumentCategory
 
 
 class IDocumentService(ABC):
@@ -8,7 +9,7 @@ class IDocumentService(ABC):
     def create_document(
         self,
         file_name: str,
-        folder_id: str | None = None,
+        category: DocumentCategory,
         uploaded_by: str | None = None,
     ) -> str: ...
 
@@ -26,7 +27,7 @@ class IDocumentService(ABC):
         file_data: bytes,
         content_type: ContentType,
         file_name: str,
-        folder_id: str | None = None,
+        category: DocumentCategory,
         uploaded_by: str | None = None,
     ) -> dict: ...
 
@@ -38,7 +39,7 @@ class IDocumentService(ABC):
     @abstractmethod
     def list_documents(
         self,
-        folder_id: str | None = None,
+        category: DocumentCategory | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict: ...
@@ -47,19 +48,4 @@ class IDocumentService(ABC):
     def get_document(self, document_id: str) -> dict: ...
 
     @abstractmethod
-    def update_document(
-        self,
-        document_id: str,
-        file_name: str | None = None,
-        folder_id: str | None = None,
-        clear_folder: bool = False,
-    ) -> dict: ...
-
-    @abstractmethod
     def delete_document(self, document_id: str) -> None: ...
-
-    @abstractmethod
-    def retry_vectorization(self, document_id: str, version_number: int) -> dict: ...
-
-    @abstractmethod
-    def list_versions(self, document_id: str) -> list[dict]: ...

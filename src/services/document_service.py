@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 
 from src.data.postgres_client import get_session
 from src.enums.content_type import ContentType
+from src.enums.document_category import DocumentCategory
 from src.enums.vectorization_status import VectorizationStatus
-from src.exceptions import ConflictError, NotFoundError, ValidationError
+from src.exceptions import NotFoundError, ValidationError
 from src.interfaces.document_service import IDocumentService
 from src.interfaces.text_extractor import ITextExtractor
 from src.interfaces.vector_index_service import IVectorIndexService
-from src.models.document_folder import DocumentFolder
 from src.models.document_version import DocumentVersion
 from src.models.knowledge_document import KnowledgeDocument
 from src.services.text_extractor import get_text_extractor
@@ -34,12 +34,6 @@ class DocumentService(IDocumentService):
     @staticmethod
     def _version_marker(document_id: str, version_number: int) -> str:
         return f"{document_id}:{version_number}"
-
-    def _ensure_folder_exists(self, folder_id: str | None) -> None:
-        if folder_id is None:
-            return
-        if self._session.get(DocumentFolder, folder_id) is None:
-            raise NotFoundError(f"Document folder not found: {folder_id}")
 
     def _next_version_number(self, document_id: str) -> int:
         stmt = select(DocumentVersion.version_number).where(
@@ -68,7 +62,7 @@ class DocumentService(IDocumentService):
         return {
             "id": doc.id,
             "file_name": doc.file_name,
-            "folder_id": doc.folder_id,
+            "category": doc.category,
             "uploaded_by": doc.uploaded_by,
             "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
             "versions_count": len(doc.versions),
@@ -79,14 +73,13 @@ class DocumentService(IDocumentService):
     def create_document(
         self,
         file_name: str,
-        folder_id: str | None = None,
+        category: DocumentCategory,
         uploaded_by: str | None = None,
     ) -> str:
         try:
-            self._ensure_folder_exists(folder_id)
             doc = KnowledgeDocument(
                 file_name=file_name,
-                folder_id=folder_id,
+                category=category.value,
                 uploaded_by=uploaded_by,
             )
             self._session.add(doc)
@@ -107,6 +100,8 @@ class DocumentService(IDocumentService):
         if not text:
             raise ValidationError("No text extracted from uploaded content.")
 
+        chunks, embeddings = self._vector_index.prepare(text)
+
         try:
             doc = self._session.get(KnowledgeDocument, document_id)
             if doc is None:
@@ -125,19 +120,14 @@ class DocumentService(IDocumentService):
             self._session.flush()
 
             self._demote_previous_versions(document_id)
-
-            try:
-                chunk_count = self._vector_index.index_text(
-                    document_id=document_id,
-                    version_number=version_number,
-                    file_name=doc.file_name,
-                    content_type=content_type.value,
-                    text=text,
-                )
-            except Exception:
-                version.vectorization_status = VectorizationStatus.ERROR.value
-                self._session.commit()
-                raise
+            chunk_count = self._vector_index.commit(
+                document_id=document_id,
+                version_number=version_number,
+                file_name=doc.file_name,
+                content_type=content_type.value,
+                chunks=chunks,
+                embeddings=embeddings,
+            )
 
             version.vector_id = self._version_marker(document_id, version_number)
             version.vectorization_status = VectorizationStatus.COMPLETED.value
@@ -161,20 +151,62 @@ class DocumentService(IDocumentService):
             self._session.rollback()
             raise
 
+    def _find_existing_document(
+        self, file_name: str, uploaded_by: str | None
+    ) -> KnowledgeDocument | None:
+        stmt = select(KnowledgeDocument).where(
+            KnowledgeDocument.file_name == file_name,
+            KnowledgeDocument.uploaded_by.is_(uploaded_by)
+            if uploaded_by is None
+            else KnowledgeDocument.uploaded_by == uploaded_by,
+        )
+        return self._session.execute(stmt).scalars().first()
+
     def upload_new_document(
         self,
         file_data: bytes,
         content_type: ContentType,
         file_name: str,
-        folder_id: str | None = None,
+        category: DocumentCategory,
         uploaded_by: str | None = None,
     ) -> dict:
-        document_id = self.create_document(file_name, folder_id, uploaded_by)
-        version = self.add_version(document_id, file_data, content_type)
+        text = self._text_extractor.extract_from_bytes(file_data, content_type)
+        if not text:
+            raise ValidationError("No text extracted from uploaded content.")
+        self._vector_index.prepare(text)
+
+        existing = self._find_existing_document(file_name, uploaded_by)
+        if existing is not None:
+            version = self.add_version(existing.id, file_data, content_type)
+            return {
+                "document_id": existing.id,
+                "file_name": existing.file_name,
+                "category": existing.category,
+                "created": False,
+                "version": version,
+            }
+
+        document_id = self.create_document(file_name, category, uploaded_by)
+        try:
+            version = self.add_version(document_id, file_data, content_type)
+        except Exception:
+            try:
+                doc = self._session.get(KnowledgeDocument, document_id)
+                if doc is not None:
+                    self._session.delete(doc)
+                    self._session.commit()
+            except Exception:
+                self._session.rollback()
+                logger.exception(
+                    "failed to clean up orphan document=%s after indexing failure",
+                    document_id,
+                )
+            raise
         return {
             "document_id": document_id,
             "file_name": file_name,
-            "folder_id": folder_id,
+            "category": category.value,
+            "created": True,
             "version": version,
         }
 
@@ -206,13 +238,13 @@ class DocumentService(IDocumentService):
 
     def list_documents(
         self,
-        folder_id: str | None = None,
+        category: DocumentCategory | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
         stmt = select(KnowledgeDocument)
-        if folder_id is not None:
-            stmt = stmt.where(KnowledgeDocument.folder_id == folder_id)
+        if category is not None:
+            stmt = stmt.where(KnowledgeDocument.category == category.value)
         total = len(self._session.execute(stmt).scalars().all())
         page_stmt = (
             stmt.order_by(KnowledgeDocument.created_at.desc())
@@ -233,31 +265,6 @@ class DocumentService(IDocumentService):
             raise NotFoundError(f"Document not found: {document_id}")
         return self._serialize_document(doc)
 
-    def update_document(
-        self,
-        document_id: str,
-        file_name: str | None = None,
-        folder_id: str | None = None,
-        clear_folder: bool = False,
-    ) -> dict:
-        try:
-            doc = self._session.get(KnowledgeDocument, document_id)
-            if doc is None:
-                raise NotFoundError(f"Document not found: {document_id}")
-            if file_name is not None:
-                doc.file_name = file_name
-            if clear_folder:
-                doc.folder_id = None
-            elif folder_id is not None:
-                self._ensure_folder_exists(folder_id)
-                doc.folder_id = folder_id
-            self._session.commit()
-            self._session.refresh(doc)
-            return self._serialize_document(doc)
-        except Exception:
-            self._session.rollback()
-            raise
-
     def delete_document(self, document_id: str) -> None:
         try:
             doc = self._session.get(KnowledgeDocument, document_id)
@@ -277,72 +284,6 @@ class DocumentService(IDocumentService):
         except Exception:
             self._session.rollback()
             raise
-
-    def retry_vectorization(self, document_id: str, version_number: int) -> dict:
-        try:
-            doc = self._session.get(KnowledgeDocument, document_id)
-            if doc is None:
-                raise NotFoundError(f"Document not found: {document_id}")
-            version = next(
-                (v for v in doc.versions if v.version_number == version_number), None
-            )
-            if version is None:
-                raise NotFoundError(
-                    f"Version {version_number} does not exist for document {document_id}."
-                )
-
-            latest = max(doc.versions, key=lambda v: v.version_number)
-            if version.id != latest.id:
-                raise ConflictError(
-                    "Only the latest version can be reindexed; older versions are not kept indexed."
-                )
-
-            self._demote_previous_versions(document_id)
-
-            try:
-                chunk_count = self._vector_index.index_text(
-                    document_id=document_id,
-                    version_number=version_number,
-                    file_name=doc.file_name,
-                    content_type=version.content_type,
-                    text=version.extracted_text,
-                )
-            except Exception:
-                version.vectorization_status = VectorizationStatus.ERROR.value
-                self._session.commit()
-                raise
-
-            version.vector_id = self._version_marker(document_id, version_number)
-            version.vectorization_status = VectorizationStatus.COMPLETED.value
-            self._session.commit()
-
-            return {
-                "id": version.id,
-                "document_id": document_id,
-                "version_number": version_number,
-                "vectorization_status": version.vectorization_status,
-                "chunk_count": chunk_count,
-            }
-        except Exception:
-            self._session.rollback()
-            raise
-
-    def list_versions(self, document_id: str) -> list[dict]:
-        doc = self._session.get(KnowledgeDocument, document_id)
-        if doc is None:
-            raise NotFoundError(f"Document not found: {document_id}")
-        return [
-            {
-                "id": v.id,
-                "version_number": v.version_number,
-                "content_type": v.content_type,
-                "vectorization_status": v.vectorization_status,
-                "created_at": v.created_at.isoformat() if v.created_at else None,
-            }
-            for v in sorted(
-                doc.versions, key=lambda x: x.version_number, reverse=True
-            )
-        ]
 
 
 def get_document_service(
