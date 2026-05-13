@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -19,9 +20,16 @@ from src.controller.folder_controller import (
 from src.exceptions import DomainError
 from src.integrations.llm import LlmError
 from src.logging_config import setup_logging
+from src.mcp import mcp_server
 from src.schemas.system import HealthResponse
 
 setup_logging()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    async with mcp_server.session_manager.run():
+        yield
 
 API_DESCRIPTION = """\
 SpotData — ingest, organize and query documents using RAG.
@@ -48,6 +56,7 @@ app = FastAPI(
     description=API_DESCRIPTION,
     version="0.1.0",
     contact={"name": "SpotData"},
+    lifespan=lifespan,
 )
 
 cors_origins = os.getenv("CORS_ORIGINS")
@@ -66,6 +75,8 @@ app.include_router(document_router)
 app.include_router(document_folder_router)
 app.include_router(chat_folder_router)
 app.include_router(chat_router)
+
+app.mount("/mcp", mcp_server.streamable_http_app())
 
 
 @app.exception_handler(DomainError)
