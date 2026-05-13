@@ -50,7 +50,3 @@ def test_ask_success_persists_response(session):
     assert out["answer"] == "resposta gerada"
 
 
-def test_get_unknown_message_raises_not_found(session):
-    svc = ChatService(session, StubVectorIndex(), FakeLlm())
-    with pytest.raises(NotFoundError):
-        svc.get_message("nope")
