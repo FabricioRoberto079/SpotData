@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class DocumentOut(BaseModel):
     id: str
     file_name: str
-    folder_id: str | None = None
+    category: str
     uploaded_by: str | None = None
     uploaded_at: str | None = None
     versions_count: int

@@ -12,7 +12,6 @@ from src.data.postgres_client import get_database_url
 from src.models.base_model import Base
 
 from src.models.user import User  # noqa: F401
-from src.models.document_folder import DocumentFolder  # noqa: F401
 from src.models.chat_folder import ChatFolder  # noqa: F401
 from src.models.knowledge_document import KnowledgeDocument  # noqa: F401
 from src.models.document_version import DocumentVersion  # noqa: F401
