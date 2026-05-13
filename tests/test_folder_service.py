@@ -1,11 +1,11 @@
 import pytest
 
 from src.exceptions import ConflictError, NotFoundError
-from src.services.folder_service import ChatFolderService, DocumentFolderService
+from src.services.folder_service import ChatFolderService
 
 
 def test_create_and_list_tree(session):
-    svc = DocumentFolderService(session)
+    svc = ChatFolderService(session)
     root = svc.create("Root")
     child = svc.create("Child", parent_id=root["id"])
     tree = svc.list_tree()
@@ -16,42 +16,59 @@ def test_create_and_list_tree(session):
 
 def test_create_with_unknown_parent_raises_not_found(session):
     with pytest.raises(NotFoundError):
-        DocumentFolderService(session).create("X", parent_id="nope")
+        ChatFolderService(session).create("X", parent_id="nope")
 
 
-def test_rename(session):
-    svc = DocumentFolderService(session)
+def test_update_rename(session):
+    svc = ChatFolderService(session)
     f = svc.create("Old")
-    renamed = svc.rename(f["id"], "New")
+    renamed = svc.update(f["id"], {"name": "New"})
     assert renamed["name"] == "New"
 
 
-def test_move_to_self_raises_conflict(session):
-    svc = DocumentFolderService(session)
+def test_update_move(session):
+    svc = ChatFolderService(session)
+    a = svc.create("A")
+    b = svc.create("B")
+    moved = svc.update(b["id"], {"parent_id": a["id"]})
+    assert moved["parent_id"] == a["id"]
+
+
+def test_update_rename_and_move_together(session):
+    svc = ChatFolderService(session)
+    a = svc.create("A")
+    b = svc.create("B")
+    result = svc.update(b["id"], {"name": "B-new", "parent_id": a["id"]})
+    assert result["name"] == "B-new"
+    assert result["parent_id"] == a["id"]
+
+
+def test_update_move_to_root(session):
+    svc = ChatFolderService(session)
+    a = svc.create("A")
+    b = svc.create("B", parent_id=a["id"])
+    moved = svc.update(b["id"], {"parent_id": None})
+    assert moved["parent_id"] is None
+
+
+def test_update_move_to_self_raises_conflict(session):
+    svc = ChatFolderService(session)
     f = svc.create("X")
     with pytest.raises(ConflictError):
-        svc.move(f["id"], new_parent_id=f["id"])
+        svc.update(f["id"], {"parent_id": f["id"]})
 
 
-def test_move_to_descendant_raises_conflict(session):
-    svc = DocumentFolderService(session)
+def test_update_move_to_descendant_raises_conflict(session):
+    svc = ChatFolderService(session)
     a = svc.create("A")
     b = svc.create("B", parent_id=a["id"])
     with pytest.raises(ConflictError):
-        svc.move(a["id"], new_parent_id=b["id"])
+        svc.update(a["id"], {"parent_id": b["id"]})
 
 
 def test_delete_with_subfolders_raises_conflict(session):
-    svc = DocumentFolderService(session)
+    svc = ChatFolderService(session)
     a = svc.create("A")
     svc.create("B", parent_id=a["id"])
     with pytest.raises(ConflictError):
         svc.delete(a["id"])
-
-
-def test_chat_folder_service_works_independently(session):
-    doc = DocumentFolderService(session).create("docs")
-    chat = ChatFolderService(session).create("chats")
-    assert doc["id"] != chat["id"]
-    assert len(DocumentFolderService(session).list_tree()) == 1
-    assert len(ChatFolderService(session).list_tree()) == 1
