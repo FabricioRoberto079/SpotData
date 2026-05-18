@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
 from src.integrations.llm import LlmClient
+from src.interfaces.qa_cache import IQaCache, question_key
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.base_model import Base
 
@@ -113,5 +114,29 @@ class StubVectorIndex(IVectorIndexService):
     def purge_document(self, document_id):
         pass
 
-    def search(self, query, n_results=5):
+    def search(self, query, n_results=5, embedding=None):
         return self._results
+
+
+class StubQaCache(IQaCache):
+    def __init__(self) -> None:
+        self.store: dict[str, dict] = {}
+        self.semantic_hits: dict[str, dict] = {}
+        self.invalidate_calls = 0
+
+    def lookup_exact(self, question):
+        return self.store.get(question_key(question))
+
+    def lookup_semantic(self, question, embedding):
+        return self.semantic_hits.get(question_key(question))
+
+    def put(self, question, embedding, payload):
+        self.store[question_key(question)] = payload
+
+    def invalidate_all(self):
+        self.invalidate_calls += 1
+        self.store.clear()
+        self.semantic_hits.clear()
+
+    def stats(self):
+        return {"size": len(self.store), "invalidations": self.invalidate_calls}

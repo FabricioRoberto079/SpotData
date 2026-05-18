@@ -97,12 +97,18 @@ class VectorIndexService(IVectorIndexService):
     def purge_document(self, document_id: str) -> None:
         self._get_collection().delete(where={"document_id": document_id})
 
-    def search(self, query: str, n_results: int = 5) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        n_results: int = 5,
+        embedding: list[float] | None = None,
+    ) -> list[dict]:
         query = (query or "").strip()
         if not query:
             return []
 
-        [embedding] = self._llm.embed([query])
+        if embedding is None:
+            [embedding] = self._llm.embed([query])
         results = self._get_collection().query(
             query_embeddings=[embedding],
             n_results=n_results,
