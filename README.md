@@ -114,6 +114,46 @@ Auth obrigatória (JWT) em tudo, exceto `POST /auth/register`, `POST /auth/login
 
 ---
 
+## MCP (Model Context Protocol)
+
+O servidor expõe a busca RAG via MCP no endpoint streamable HTTP `/mcp`,
+montado no mesmo processo da API. Código isolado em `src/mcp/`:
+
+```
+src/mcp/
+  __init__.py     # expõe mcp_server e importa tools para registrá-las
+  server.py       # instância FastMCP
+  auth.py         # SPOTDATA_JWT → user_id
+  tools.py        # @tool ask_question
+```
+
+**Tool exposta:**
+
+| Tool | Args | Retorno |
+|---|---|---|
+| `ask_question` | `question`, `chat_id?`, `n_results?` | mesmo payload de `POST /chats/messages` |
+
+**Auth:** o MCP server lê `SPOTDATA_JWT` do ambiente — é o mesmo `access_token`
+retornado por `POST /auth/login`. Quando o token expira, gere outro e atualize
+a env. Sem `SPOTDATA_JWT`, qualquer chamada à tool falha.
+
+**Configurar:**
+
+```bash
+# 1. obter o token
+curl -s -X POST http://localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"...","password":"..."}' | jq -r .access_token
+# 2. exportar no env do processo da API
+export SPOTDATA_JWT=<token>
+# 3. (re)subir a API — `/mcp` fica disponível no mesmo host
+```
+
+Aponte qualquer cliente MCP (Claude Desktop, etc.) pro endpoint
+`http://<host>:8080/mcp`.
+
+---
+
 ## Variáveis de ambiente
 
 | Variável | Exemplo | Descrição |
