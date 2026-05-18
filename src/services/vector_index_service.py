@@ -18,6 +18,7 @@ from src.services.text_chunker import get_text_chunker
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "spots"
+UPSERT_BATCH_SIZE = 100
 
 
 class VectorIndexService(IVectorIndexService):
@@ -39,14 +40,7 @@ class VectorIndexService(IVectorIndexService):
     def _chunk_id(document_id: str, version_number: int, chunk_index: int) -> str:
         return f"{document_id}:{version_number}:{chunk_index}"
 
-    def index_text(
-        self,
-        document_id: str,
-        version_number: int,
-        file_name: str,
-        content_type: str,
-        text: str,
-    ) -> int:
+    def prepare(self, text: str) -> tuple[list[str], list[list[float]]]:
         chunks = self._text_chunker.chunk(text)
         if not chunks:
             raise ValidationError("No usable text after chunking.")
@@ -58,7 +52,17 @@ class VectorIndexService(IVectorIndexService):
                 502,
                 f"Embeddings em quantidade incorreta (esperado {len(chunks)}, recebido {len(embeddings)}).",
             )
+        return chunks, embeddings
 
+    def commit(
+        self,
+        document_id: str,
+        version_number: int,
+        file_name: str,
+        content_type: str,
+        chunks: list[str],
+        embeddings: list[list[float]],
+    ) -> int:
         ids = [
             self._chunk_id(document_id, version_number, i) for i in range(len(chunks))
         ]
@@ -74,12 +78,15 @@ class VectorIndexService(IVectorIndexService):
             }
             for i in range(len(chunks))
         ]
-        self._get_collection().upsert(
-            ids=ids,
-            documents=chunks,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
+        collection = self._get_collection()
+        for start in range(0, len(chunks), UPSERT_BATCH_SIZE):
+            end = start + UPSERT_BATCH_SIZE
+            collection.upsert(
+                ids=ids[start:end],
+                documents=chunks[start:end],
+                embeddings=embeddings[start:end],
+                metadatas=metadatas[start:end],
+            )
         return len(chunks)
 
     def demote_latest(self, document_id: str) -> None:

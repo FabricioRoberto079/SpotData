@@ -11,9 +11,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post(
     "/register",
-    response_model=TokenResponse,
+    response_model=UserOut,
     status_code=201,
-    summary="Register a user and return the token",
+    summary="Register a user and return its data",
 )
 async def register(
     payload: RegisterRequest,

@@ -94,10 +94,10 @@ Auth obrigatória (JWT) em tudo, exceto `POST /auth/register`, `POST /auth/login
 | Grupo | Rotas |
 |---|---|
 | Auth | `POST /auth/register` • `POST /auth/login` • `GET /auth/me` |
-| Documentos | `GET POST /documents` • `POST /documents/upload` • `POST /documents/text` • `GET /documents/search` • `GET PATCH DELETE /documents/{id}` • `GET POST /documents/{id}/versions` • `GET /documents/{id}/versions/{n}/download` • `POST /documents/{id}/versions/{n}/retry` |
-| Pastas | `POST GET PATCH DELETE /document-folders` • `POST GET PATCH DELETE /chat-folders` |
+| Documentos | `GET /documents` (filtrar por `?category=documents\|images\|text`) • `POST /documents/upload` (re-upload do mesmo `file_name` → nova versão automática) • `POST /documents/text` • `GET /documents/search` • `GET DELETE /documents/{id}` • `GET /documents/{id}/download` • `GET /documents/{id}/versions/{n}/download` |
+| Pastas de chat | `GET POST /chat-folders` • `PUT DELETE /chat-folders/{id}` |
 | Chats | `GET /chats` • `GET PATCH DELETE /chats/{chat_id}` |
-| Mensagens | `POST /chats/messages` • `GET DELETE /chats/messages/{message_id}` |
+| Mensagens | `POST /chats/messages` |
 
 > Não existe `POST /chats` — chat é criado pela primeira mensagem. `PATCH /chats/{id}` permite renomear ou mover de pasta depois.
 

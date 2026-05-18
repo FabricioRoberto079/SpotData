@@ -13,10 +13,7 @@ from fastapi.responses import JSONResponse
 from src.controller.auth_controller import router as auth_router
 from src.controller.chat_controller import router as chat_router
 from src.controller.document_controller import router as document_router
-from src.controller.folder_controller import (
-    chat_folder_router,
-    document_folder_router,
-)
+from src.controller.folder_controller import chat_folder_router
 from src.exceptions import DomainError
 from src.integrations.llm import LlmError
 from src.logging_config import setup_logging
@@ -72,7 +69,6 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(document_router)
-app.include_router(document_folder_router)
 app.include_router(chat_folder_router)
 app.include_router(chat_router)
 
@@ -143,7 +139,6 @@ def _custom_openapi():
     schema["tags"] = [
         {"name": "auth", "description": "Registration, login and current-user introspection."},
         {"name": "documents", "description": "Upload, versioning and semantic search."},
-        {"name": "document-folders", "description": "Folder tree for documents."},
         {"name": "chat-folders", "description": "Folder tree for chats."},
         {"name": "chats", "description": "Conversations and RAG messages (search + LLM + citations)."},
         {"name": "system", "description": "Healthcheck and utilities."},

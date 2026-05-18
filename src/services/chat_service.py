@@ -15,7 +15,6 @@ from src.interfaces.chat_service import IChatService
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
-from src.models.document_version import DocumentVersion
 from src.models.evidence_citation import EvidenceCitation
 from src.models.knowledge_document import KnowledgeDocument
 from src.models.query import Query
@@ -27,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 CHAT_HISTORY_LIMIT = 10
 CHAT_TITLE_MAX_CHARS = 60
+RAG_TOP_K = 5
 
 
 class ChatService(IChatService):
@@ -106,15 +106,15 @@ class ChatService(IChatService):
 
     def _serialize_citation(self, citation: EvidenceCitation) -> dict:
         doc = self._session.get(KnowledgeDocument, citation.document_id)
-        version = (
-            self._session.get(DocumentVersion, citation.document_version_id)
-            if citation.document_version_id
+        latest = (
+            max(doc.versions, key=lambda v: v.version_number)
+            if doc and doc.versions
             else None
         )
         return {
             "document_id": citation.document_id,
-            "document_version_id": citation.document_version_id,
-            "version_number": version.version_number if version else None,
+            "document_version_id": latest.id if latest else None,
+            "version_number": latest.version_number if latest else None,
             "file_name": doc.file_name if doc else None,
             "excerpt": citation.used_excerpt,
             "confidence_score": citation.confidence_score,
@@ -188,14 +188,13 @@ class ChatService(IChatService):
         question: str,
         chat_id: str | None = None,
         user_id: str | None = None,
-        n_results: int = 5,
     ) -> dict:
         question = question.strip()
         if not question:
             raise ValidationError("Empty question.")
 
         started = time.perf_counter()
-        contexts = self._vector_index.search(question, n_results=n_results)
+        contexts = self._vector_index.search(question, n_results=RAG_TOP_K)
 
         try:
             chat_id = self._resolve_or_create_chat(chat_id, question, user_id)
@@ -310,38 +309,6 @@ class ChatService(IChatService):
         except Exception:
             self._session.rollback()
             raise
-
-    def get_message(self, message_id: str) -> dict:
-        query_row = self._session.get(Query, message_id)
-        if query_row is None:
-            raise NotFoundError(f"Message not found: {message_id}")
-        response_row = query_row.response
-        citations = []
-        if response_row is not None:
-            for c in response_row.citations:
-                citations.append(self._serialize_citation(c))
-        return {
-            "query_id": query_row.id,
-            "chat_id": query_row.chat_id,
-            "question": query_row.question,
-            "response_id": response_row.id if response_row else None,
-            "status": response_row.status if response_row else None,
-            "answer": response_row.response_text if response_row else None,
-            "citations": citations,
-            "time_ms": response_row.time_ms if response_row else None,
-        }
-
-    def delete_message(self, message_id: str) -> None:
-        try:
-            query_row = self._session.get(Query, message_id)
-            if query_row is None:
-                raise NotFoundError(f"Message not found: {message_id}")
-            self._session.delete(query_row)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
-
 
 def get_chat_service(
     session: Session = Depends(get_session),

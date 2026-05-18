@@ -20,11 +20,4 @@ class IChatService(ABC):
         question: str,
         chat_id: str | None = None,
         user_id: str | None = None,
-        n_results: int = 5,
     ) -> dict: ...
-
-    @abstractmethod
-    def get_message(self, message_id: str) -> dict: ...
-
-    @abstractmethod
-    def delete_message(self, message_id: str) -> None: ...
