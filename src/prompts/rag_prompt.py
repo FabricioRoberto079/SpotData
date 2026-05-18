@@ -47,7 +47,16 @@ document (document_id) with a literal excerpt and a realistic confidence_score.
 5. Each context entry includes the version's `created_at` date. When the cited \
 content is older than {STALE_AFTER_DAYS} days relative to TODAY, append a short \
 warning at the end of `answer` in the same language as the question, mentioning \
-the document date (e.g. "based on a document from 2024-02 — verify if still current")."""
+the document date (e.g. "based on a document from 2024-02 — verify if still current").
+6. Format `answer` as Markdown compatible with Tiptap: use **bold**, *italic*, \
+`code`, lists (- / 1.), headings (##) and tables when they help readability. \
+Do not wrap the whole answer in code blocks.
+7. Highlight the key terms from the QUESTION whenever they appear inside `answer` \
+using the Tiptap highlight syntax `==term==` (rendered as `<mark>`). Highlight only \
+the substantive nouns/expressions present in the question (not stopwords like "qual", \
+"como", "what", "the"). Each distinct term should be highlighted on its first \
+occurrence; further mentions are optional. Excerpts inside `citations` must remain \
+literal — do NOT add highlights or any other markup there."""
 
 
 def _format_created_at(value) -> str:
