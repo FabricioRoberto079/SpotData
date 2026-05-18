@@ -47,7 +47,23 @@ document (document_id) with a literal excerpt and a realistic confidence_score.
 5. Each context entry includes the version's `created_at` date. When the cited \
 content is older than {STALE_AFTER_DAYS} days relative to TODAY, append a short \
 warning at the end of `answer` in the same language as the question, mentioning \
-the document date (e.g. "based on a document from 2024-02 — verify if still current")."""
+the document date (e.g. "based on a document from 2024-02 — verify if still current").
+6. Format `answer` as Markdown compatible with Tiptap: use **bold**, *italic*, \
+`code`, lists (- / 1.), headings (##) and tables when they help readability. \
+Do not wrap the whole answer in code blocks.
+7. MANDATORY HIGHLIGHTING — every substantive term from the QUESTION that appears \
+in `answer` MUST be wrapped in `==…==` (Tiptap highlight syntax, rendered as `<mark>`). \
+This is NOT optional. Skip only stopwords (qual, como, quanto, what, the, a, o, é, de). \
+Highlight on the FIRST occurrence of each distinct term; further mentions are optional. \
+You can combine with **bold** by nesting: `==**term**==`. Excerpts inside `citations` \
+MUST remain literal — never add `==` or any other markup there.
+
+Concrete example (note how every substantive term from the question is wrapped in ==…==):
+  QUESTION: "Qual a meta de receita de 2026 e a divisão entre canais?"
+  GOOD answer: "A ==meta de receita== para ==2026== é de **BRL 12 milhões**. \
+A ==divisão entre canais== é **60%** varejo e **40%** atacado."
+  BAD answer (missing highlights): "A meta de receita para 2026 é de BRL 12 milhões..."
+  BAD answer (highlighted stopwords): "==Qual== a ==meta== ..." """
 
 
 def _format_created_at(value) -> str:

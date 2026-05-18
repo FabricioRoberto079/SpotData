@@ -12,6 +12,7 @@ from src.enums.response_status import ResponseStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.integrations.llm import LlmClient, LlmError, get_llm_client
 from src.interfaces.chat_service import IChatService
+from src.interfaces.qa_cache import IQaCache
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
@@ -20,6 +21,7 @@ from src.models.knowledge_document import KnowledgeDocument
 from src.models.query import Query
 from src.models.response import Response as ResponseModel
 from src.prompts.rag_prompt import RagAnswer, build_messages
+from src.services.qa_cache import get_qa_cache
 from src.services.vector_index_service import get_vector_index_service
 
 logger = logging.getLogger(__name__)
@@ -35,10 +37,12 @@ class ChatService(IChatService):
         session: Session,
         vector_index: IVectorIndexService,
         llm_client: LlmClient,
+        cache: IQaCache,
     ) -> None:
         self._session = session
         self._vector_index = vector_index
         self._llm = llm_client
+        self._cache = cache
 
     @staticmethod
     def _serialize(chat: Chat) -> dict:
@@ -183,6 +187,83 @@ class ChatService(IChatService):
         self._session.flush()
         return response_row
 
+    def _build_cache_payload(self, question: str, rag: RagAnswer) -> dict:
+        return {
+            "question": question,
+            "answer": rag.answer,
+            "status": rag.status,
+            "citations": [
+                {
+                    "document_id": c.document_id,
+                    "version_number": c.version_number,
+                    "excerpt": c.excerpt,
+                    "confidence_score": c.confidence_score,
+                }
+                for c in rag.citations
+            ],
+        }
+
+    def _serve_from_cache(
+        self,
+        question: str,
+        cached: dict,
+        user_id: str | None,
+        started: float,
+    ) -> dict:
+        try:
+            chat_id = self._resolve_or_create_chat(None, question, user_id)
+            query_row = Query(user_id=user_id, chat_id=chat_id, question=question)
+            self._session.add(query_row)
+            self._session.flush()
+
+            elapsed = int((time.perf_counter() - started) * 1000)
+            response_row = self._persist_response(
+                query_row.id,
+                cached["answer"],
+                cached["status"],
+                elapsed,
+            )
+
+            citations_payload: list[dict] = []
+            if cached["status"] == ResponseStatus.SUCCESS.value:
+                for c in cached.get("citations", []):
+                    doc = self._session.get(KnowledgeDocument, c["document_id"])
+                    if doc is None:
+                        continue
+                    version_id = self._latest_version_id(c["document_id"])
+                    citation_row = EvidenceCitation(
+                        response_id=response_row.id,
+                        document_id=c["document_id"],
+                        document_version_id=version_id,
+                        used_excerpt=c["excerpt"],
+                        confidence_score=c["confidence_score"],
+                    )
+                    self._session.add(citation_row)
+                    self._session.flush()
+                    citations_payload.append(self._serialize_citation(citation_row))
+
+            self._session.commit()
+            logger.info(
+                "message %s cached=true status=%s citations=%d elapsed=%dms",
+                query_row.id,
+                response_row.status,
+                len(citations_payload),
+                elapsed,
+            )
+            return {
+                "query_id": query_row.id,
+                "response_id": response_row.id,
+                "chat_id": chat_id,
+                "question": question,
+                "status": response_row.status,
+                "answer": response_row.response_text,
+                "citations": citations_payload,
+                "time_ms": elapsed,
+            }
+        except Exception:
+            self._session.rollback()
+            raise
+
     def ask(
         self,
         question: str,
@@ -194,7 +275,23 @@ class ChatService(IChatService):
             raise ValidationError("Empty question.")
 
         started = time.perf_counter()
-        contexts = self._vector_index.search(question, n_results=RAG_TOP_K)
+        cache_eligible = chat_id is None
+
+        if cache_eligible:
+            cached = self._cache.lookup_exact(question)
+            if cached is not None:
+                return self._serve_from_cache(question, cached, user_id, started)
+
+        question_embedding: list[float] | None = None
+        if cache_eligible:
+            question_embedding = self._llm.embed([question])[0]
+            cached = self._cache.lookup_semantic(question, question_embedding)
+            if cached is not None:
+                return self._serve_from_cache(question, cached, user_id, started)
+
+        contexts = self._vector_index.search(
+            question, n_results=RAG_TOP_K, embedding=question_embedding
+        )
 
         try:
             chat_id = self._resolve_or_create_chat(chat_id, question, user_id)
@@ -296,6 +393,17 @@ class ChatService(IChatService):
                 elapsed,
             )
 
+            if (
+                cache_eligible
+                and question_embedding is not None
+                and rag.status == ResponseStatus.SUCCESS.value
+            ):
+                self._cache.put(
+                    question,
+                    question_embedding,
+                    self._build_cache_payload(question, rag),
+                )
+
             return {
                 "query_id": query_row.id,
                 "response_id": response_row.id,
@@ -314,5 +422,6 @@ def get_chat_service(
     session: Session = Depends(get_session),
     vector_index: IVectorIndexService = Depends(get_vector_index_service),
     llm: LlmClient = Depends(get_llm_client),
+    cache: IQaCache = Depends(get_qa_cache),
 ) -> IChatService:
-    return ChatService(session, vector_index, llm)
+    return ChatService(session, vector_index, llm, cache)

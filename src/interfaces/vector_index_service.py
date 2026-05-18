@@ -23,4 +23,9 @@ class IVectorIndexService(ABC):
     def purge_document(self, document_id: str) -> None: ...
 
     @abstractmethod
-    def search(self, query: str, n_results: int = 5) -> list[dict]: ...
+    def search(
+        self,
+        query: str,
+        n_results: int = 5,
+        embedding: list[float] | None = None,
+    ) -> list[dict]: ...

@@ -4,24 +4,24 @@ from src.enums.response_status import ResponseStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.prompts.rag_prompt import RagAnswer
 from src.services.chat_service import ChatService
-from tests.conftest import FakeLlm, StubVectorIndex
+from tests.conftest import FakeLlm, StubQaCache, StubVectorIndex
 
 
 def test_empty_question_raises_validation(session):
-    svc = ChatService(session, StubVectorIndex(), FakeLlm())
+    svc = ChatService(session, StubVectorIndex(), FakeLlm(), StubQaCache())
     with pytest.raises(ValidationError):
         svc.ask("   ")
 
 
 def test_ask_with_no_contexts_persists_not_found_status(session):
-    svc = ChatService(session, StubVectorIndex(results=[]), FakeLlm())
+    svc = ChatService(session, StubVectorIndex(results=[]), FakeLlm(), StubQaCache())
     out = svc.ask("alguma pergunta")
     assert out["status"] == ResponseStatus.NOT_FOUND.value
     assert out["citations"] == []
 
 
 def test_ask_unknown_chat_raises_not_found(session):
-    svc = ChatService(session, StubVectorIndex(), FakeLlm())
+    svc = ChatService(session, StubVectorIndex(), FakeLlm(), StubQaCache())
     with pytest.raises(NotFoundError):
         svc.ask("oi", chat_id="nao-existe")
 
@@ -44,7 +44,7 @@ def test_ask_success_persists_response(session):
         answer="resposta gerada",
         citations=[],
     )
-    svc = ChatService(session, StubVectorIndex(results=contexts), FakeLlm(rag))
+    svc = ChatService(session, StubVectorIndex(results=contexts), FakeLlm(rag), StubQaCache())
     out = svc.ask("qual é a resposta?")
     assert out["status"] == ResponseStatus.SUCCESS.value
     assert out["answer"] == "resposta gerada"

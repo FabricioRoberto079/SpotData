@@ -10,10 +10,12 @@ from src.enums.document_category import DocumentCategory
 from src.enums.vectorization_status import VectorizationStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.interfaces.document_service import IDocumentService
+from src.interfaces.qa_cache import IQaCache
 from src.interfaces.text_extractor import ITextExtractor
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.document_version import DocumentVersion
 from src.models.knowledge_document import KnowledgeDocument
+from src.services.qa_cache import get_qa_cache
 from src.services.text_extractor import get_text_extractor
 from src.services.vector_index_service import get_vector_index_service
 
@@ -26,10 +28,12 @@ class DocumentService(IDocumentService):
         session: Session,
         text_extractor: ITextExtractor,
         vector_index: IVectorIndexService,
+        cache: IQaCache,
     ) -> None:
         self._session = session
         self._text_extractor = text_extractor
         self._vector_index = vector_index
+        self._cache = cache
 
     @staticmethod
     def _version_marker(document_id: str, version_number: int) -> str:
@@ -132,6 +136,8 @@ class DocumentService(IDocumentService):
             version.vector_id = self._version_marker(document_id, version_number)
             version.vectorization_status = VectorizationStatus.COMPLETED.value
             self._session.commit()
+
+            self._cache.invalidate_all()
 
             logger.info(
                 "indexed document=%s version=%d chunks=%d",
@@ -281,6 +287,7 @@ class DocumentService(IDocumentService):
 
             self._session.delete(doc)
             self._session.commit()
+            self._cache.invalidate_all()
         except Exception:
             self._session.rollback()
             raise
@@ -290,5 +297,6 @@ def get_document_service(
     session: Session = Depends(get_session),
     text_extractor: ITextExtractor = Depends(get_text_extractor),
     vector_index: IVectorIndexService = Depends(get_vector_index_service),
+    cache: IQaCache = Depends(get_qa_cache),
 ) -> IDocumentService:
-    return DocumentService(session, text_extractor, vector_index)
+    return DocumentService(session, text_extractor, vector_index, cache)
