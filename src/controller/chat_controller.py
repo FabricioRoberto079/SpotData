@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from src.integrations.auth import get_current_user
 from src.interfaces.chat_service import IChatService
 from src.models.user import User
-from src.schemas.chat import ChatOut
+from src.schemas.chat import ChatDetailOut, ChatOut
 from src.schemas.query import QueryAnswer
 from src.schemas.system import MessageResponse
 from src.services.chat_service import get_chat_service
@@ -62,7 +62,11 @@ async def send_message(
     )
 
 
-@router.get("/{chat_id}", response_model=ChatOut, summary="Get chat details")
+@router.get(
+    "/{chat_id}",
+    response_model=ChatDetailOut,
+    summary="Get chat details with messages",
+)
 async def get_chat(
     chat_id: str,
     current_user: User | None = Depends(get_current_user),

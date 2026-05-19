@@ -71,7 +71,52 @@ class ChatService(IChatService):
         chat = self._session.get(Chat, chat_id)
         if chat is None:
             raise NotFoundError(f"Chat not found: {chat_id}")
-        return self._serialize(chat)
+        payload = self._serialize(chat)
+        payload["messages"] = self._serialize_messages(chat_id)
+        return payload
+
+    def _serialize_messages(self, chat_id: str) -> list[dict]:
+        stmt = (
+            select(Query)
+            .where(Query.chat_id == chat_id)
+            .order_by(Query.created_at.asc())
+        )
+        queries = self._session.execute(stmt).scalars().all()
+
+        messages: list[dict] = []
+        for q in queries:
+            messages.append(
+                {
+                    "id": q.id,
+                    "role": "user",
+                    "content": q.question,
+                    "created_at": q.created_at.isoformat() if q.created_at else None,
+                    "status": None,
+                    "citations": [],
+                    "time_ms": None,
+                }
+            )
+            response = q.response
+            if response is None:
+                continue
+            messages.append(
+                {
+                    "id": response.id,
+                    "role": "assistant",
+                    "content": response.response_text,
+                    "created_at": (
+                        response.created_at.isoformat()
+                        if response.created_at
+                        else None
+                    ),
+                    "status": response.status,
+                    "citations": [
+                        self._serialize_citation(c) for c in response.citations
+                    ],
+                    "time_ms": response.time_ms,
+                }
+            )
+        return messages
 
     def update(self, chat_id: str, fields: dict) -> dict:
         try:
