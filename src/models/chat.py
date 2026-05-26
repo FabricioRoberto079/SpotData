@@ -16,4 +16,6 @@ class Chat(BaseModel):
     )
 
     folder: Mapped["ChatFolder | None"] = relationship(back_populates="chats")
-    queries: Mapped[list["Query"]] = relationship(back_populates="chat")
+    queries: Mapped[list["Query"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
