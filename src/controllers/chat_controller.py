@@ -58,9 +58,8 @@ async def send_message(
         user_id=current_user.id,
     )
 
-    # Force first iteration so early errors (validation, not-found, LLM auth, etc.)
-    # bubble up BEFORE the StreamingResponse starts — they become proper JSON error
-    # responses with the right status code (mirrors `if !Response.HasStarted` in .NET).
+    # Force first event so early errors surface as proper HTTP responses
+    # before StreamingResponse opens the chunked body.
     try:
         first_event = await event_gen.__anext__()
     except StopAsyncIteration:
@@ -90,7 +89,12 @@ async def send_message(
         except Exception:
             logger.exception("stream failed mid-iteration")
             yield _encode_event(
-                {"type": "error", "kind": "unexpected", "message": "Internal error."}
+                {
+                    "type": "error",
+                    "kind": "unexpected",
+                    "status_code": 500,
+                    "message": "Unexpected error while generating response.",
+                }
             )
 
     return StreamingResponse(
