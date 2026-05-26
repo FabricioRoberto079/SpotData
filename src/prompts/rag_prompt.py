@@ -1,69 +1,114 @@
 from datetime import datetime, timezone
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-LlmStatus = Literal["success", "insufficient_information"]
-
 STALE_AFTER_DAYS = 365
 
 
-class Citation(BaseModel):
-    document_id: str = Field(description="ID of the cited KnowledgeDocument.")
-    version_number: int | None = Field(
-        default=None, description="Version number consulted (when known)."
+class RegisterEvidence(BaseModel):
+    """Register the source evidence that supports a factual claim by pointing
+    at one of the CONTEXT entries. Use the integer in the `[index=N ...]`
+    header of each entry — the server resolves document, version, page and
+    excerpt from that index, so we keep the model's output tiny and fast."""
+
+    context_index: int = Field(
+        description=(
+            "0-based index of the CONTEXT entry that supports this claim, "
+            "exactly as shown in the entry's [index=N ...] header."
+        )
     )
-    excerpt: str = Field(description="Literal excerpt taken from the document.")
-    confidence_score: float = Field(
-        ge=0.0, le=1.0, description="Confidence from 0.0 to 1.0 about the citation."
+    confidence: float = Field(
+        description="Confidence in this citation in the range 0.0–1.0."
     )
+
+
+Cite = RegisterEvidence
 
 
 class RagAnswer(BaseModel):
-    status: LlmStatus = Field(
+    """The structured RAG answer. Plan `citations` from the CONTEXT first,
+    then write `answer` so every claim is backed by one of those entries.
+
+    NOTE: field order is load-bearing. OpenAI's strict JSON-schema decoding
+    emits fields in schema order, and `chat_service.ask_stream` exploits this
+    to deliver the `citations` event to the UI before the `answer` tokens
+    finish streaming. Do not reorder unless you also update that streaming
+    logic.
+    """
+
+    citations: list[RegisterEvidence] = Field(
         description=(
-            "'success' if the answer was produced from the context, "
-            "'insufficient_information' if the context does not cover the question."
+            "One entry per factual claim that will appear in `answer`. Empty "
+            "when `answer` is empty or the question is conversational."
         )
     )
-    answer: str = Field(description="Natural-language answer.")
-    citations: list[Citation] = Field(
-        default_factory=list,
-        description="Citations supporting the answer. Empty when status != success.",
+    answer: str = Field(
+        description=(
+            "The natural-language answer in Tiptap-compatible Markdown. "
+            "MANDATORY: every substantive term from the user's question that "
+            "appears here MUST be wrapped in `==…==` (Tiptap highlight, "
+            "renders as <mark>). DO NOT substitute with `**bold**` — bold and "
+            "highlight are distinct. Example: question 'O que é NTFS?' → "
+            "answer must contain `==**NTFS**==`, never `**NTFS**` alone. "
+            "Skip stopwords (qual, como, what, the, a, o, é, de). "
+            "MUST NOT contain document IDs, source attributions, or citation-"
+            "like JSON — those belong exclusively in the `citations` field. "
+            "Leave empty only if CONTEXT does not cover the question or the "
+            "user is greeting/chit-chatting."
+        )
     )
 
 
-SYSTEM_PROMPT = f"""You are an assistant that answers questions using \
-strictly the CONTEXT provided by the user.
+SYSTEM_PROMPT = f"""You are an assistant that answers questions using STRICTLY \
+the CONTEXT provided by the user.
 
-Mandatory rules:
-1. Use only information present in the CONTEXT. Do not invent anything.
-2. If the CONTEXT does not cover the question, return status='insufficient_information' \
+You MUST output a single JSON object matching the schema with two top-level \
+fields, IN THIS ORDER: `citations` and `answer`. First select the CONTEXT \
+entries that back your answer and fill `citations` — one entry per claim, \
+identifying each by its `context_index` (the integer in the `[index=N ...]` \
+header). Then write `answer` so every substantive claim is backed by one of \
+those citations. NEVER write document IDs, file names, source attributions, \
+or quoted excerpts inside the `answer` string — sources belong EXCLUSIVELY \
+in the `citations` array.
+
+Rules:
+- Use only information present in the CONTEXT. Do not invent anything.
+- If the user is greeting, chit-chatting, thanking, saying goodbye, or otherwise \
+NOT asking a question answerable from the CONTEXT (e.g. "oi", "olá", "tudo bem?", \
+"obrigado", "hello", "how are you", "thanks"), set `answer` to an empty string \
 and leave `citations` empty.
-3. Each relevant statement must have at least one citation pointing to the \
-document (document_id) with a literal excerpt and a realistic confidence_score.
-4. The answer must be objective and written in the same language as the question.
-5. Each context entry includes the version's `created_at` date. When the cited \
+- If the CONTEXT does not cover the question, set `answer` to an empty string \
+and leave `citations` empty.
+- When `answer` is non-empty, every substantive claim in it MUST be backed by \
+at least one matching entry in `citations`. Each citation must reference a \
+real `context_index` from the CONTEXT block; never invent indices.
+- Answer in the same language as the question.
+- Each context entry includes the version's `created_at` date. When cited \
 content is older than {STALE_AFTER_DAYS} days relative to TODAY, append a short \
-warning at the end of `answer` in the same language as the question, mentioning \
-the document date (e.g. "based on a document from 2024-02 — verify if still current").
-6. Format `answer` as Markdown compatible with Tiptap: use **bold**, *italic*, \
-`code`, lists (- / 1.), headings (##) and tables when they help readability. \
-Do not wrap the whole answer in code blocks.
-7. MANDATORY HIGHLIGHTING — every substantive term from the QUESTION that appears \
-in `answer` MUST be wrapped in `==…==` (Tiptap highlight syntax, rendered as `<mark>`). \
-This is NOT optional. Skip only stopwords (qual, como, quanto, what, the, a, o, é, de). \
-Highlight on the FIRST occurrence of each distinct term; further mentions are optional. \
-You can combine with **bold** by nesting: `==**term**==`. Excerpts inside `citations` \
-MUST remain literal — never add `==` or any other markup there.
+warning at the end of `answer` mentioning the document date.
+- Format `answer` as Tiptap-compatible Markdown: **bold** (for emphasis on \
+non-question terms only), *italic*, `code`, lists (- / 1.), headings (##), \
+tables. Do not wrap the whole answer in code blocks.
+- MANDATORY HIGHLIGHTING — every substantive term from the QUESTION that \
+appears in `answer` MUST be wrapped in `==…==` (Tiptap highlight syntax, \
+rendered as `<mark>`). This is NOT optional and `**bold**` is NOT a \
+substitute — they are distinct marks. Skip only stopwords (qual, como, \
+quanto, what, the, a, o, é, de). Highlight on the FIRST occurrence of each \
+distinct term; further mentions are optional. To emphasize a highlighted \
+term, NEST: `==**term**==` (not `**term**` alone).
 
-Concrete example (note how every substantive term from the question is wrapped in ==…==):
+Concrete examples (note `==…==`, never `**bold**` alone for question terms):
+
   QUESTION: "Qual a meta de receita de 2026 e a divisão entre canais?"
-  GOOD answer: "A ==meta de receita== para ==2026== é de **BRL 12 milhões**. \
+  ✓ GOOD: "A ==meta de receita== para ==2026== é de **BRL 12 milhões**. \
 A ==divisão entre canais== é **60%** varejo e **40%** atacado."
-  BAD answer (missing highlights): "A meta de receita para 2026 é de BRL 12 milhões..."
-  BAD answer (highlighted stopwords): "==Qual== a ==meta== ..." """
+  ✗ BAD (bold instead of highlight): "A **meta de receita** para **2026** é..."
+  ✗ BAD (highlighted stopword): "==Qual== a ==meta== ..."
+
+  QUESTION: "O que é o sistema de arquivos NTFS?"
+  ✓ GOOD: "O ==**sistema de arquivos NTFS**== é um sistema desenvolvido para…"
+  ✗ BAD: "O **sistema de arquivos NTFS** é um sistema desenvolvido para…" """
 
 
 def _format_created_at(value) -> str:
@@ -74,26 +119,51 @@ def _format_created_at(value) -> str:
     return str(value)
 
 
-def build_messages(question: str, contexts: list[dict]) -> list[dict]:
+FALLBACK_SYSTEM_PROMPT = """You are an assistant that answers questions using \
+STRICTLY the CONTEXT provided by the user.
+
+Output ONLY a natural-language answer in plain Markdown (Tiptap-compatible). \
+Do NOT call any tools. Use only information from the CONTEXT — do not invent.
+
+Rules:
+1. Answer in the same language as the question.
+2. Format using **bold**, *italic*, lists (- / 1.), headings (##), and tables \
+when helpful. Do not wrap the whole answer in code blocks.
+3. Wrap every substantive term from the QUESTION that appears in your answer \
+in `==…==` (Tiptap highlight syntax). Skip stopwords (qual, como, what, the, \
+a, o, é, de). Highlight the FIRST occurrence of each distinct term; further \
+mentions are optional. You can combine with **bold**: `==**term**==`.
+4. If the CONTEXT does not cover the question, output a single sentence \
+explaining that the answer is not available in the context."""
+
+
+def _build_user_content(question: str, contexts: list[dict]) -> str:
     today = datetime.now(timezone.utc).date().isoformat()
     if contexts:
         context_block = "\n\n".join(
-            f"[document_id={c.get('document_id')} version={c.get('version_number')} "
-            f"file={c.get('file_name')} "
+            f"[index={i} file={c.get('file_name')} "
             f"created_at={_format_created_at(c.get('version_created_at'))}]\n"
             f"{c.get('snippet', '')}"
-            for c in contexts
+            for i, c in enumerate(contexts)
         )
     else:
         context_block = "(empty)"
-
-    user_content = (
+    return (
         f"TODAY: {today}\n\n"
         f"CONTEXT:\n{context_block}\n\n"
         f"QUESTION: {question}"
     )
 
+
+def build_messages(question: str, contexts: list[dict]) -> list[dict]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
+        {"role": "user", "content": _build_user_content(question, contexts)},
+    ]
+
+
+def build_fallback_messages(question: str, contexts: list[dict]) -> list[dict]:
+    return [
+        {"role": "system", "content": FALLBACK_SYSTEM_PROMPT},
+        {"role": "user", "content": _build_user_content(question, contexts)},
     ]

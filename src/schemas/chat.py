@@ -25,3 +25,16 @@ class ChatMessageOut(BaseModel):
 
 class ChatDetailOut(ChatOut):
     messages: list[ChatMessageOut] = Field(default_factory=list)
+
+
+class ChatUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    folder_id: str | None = Field(
+        default=None,
+        description="Optional. Target folder ID. Omit to leave the folder unchanged.",
+    )
+
+
+class MessageCreate(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    chat_id: str | None = None

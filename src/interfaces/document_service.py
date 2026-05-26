@@ -33,7 +33,10 @@ class IDocumentService(ABC):
 
     @abstractmethod
     def get_version_file(
-        self, document_id: str, version_number: int | None = None
+        self,
+        document_id: str,
+        version_number: int | None = None,
+        uploaded_by: str | None = None,
     ) -> tuple[bytes, str, str, int]: ...
 
     @abstractmethod
@@ -42,10 +45,15 @@ class IDocumentService(ABC):
         category: DocumentCategory | None = None,
         limit: int = 50,
         offset: int = 0,
+        uploaded_by: str | None = None,
     ) -> dict: ...
 
     @abstractmethod
-    def get_document(self, document_id: str) -> dict: ...
+    def get_document(
+        self, document_id: str, uploaded_by: str | None = None
+    ) -> dict: ...
 
     @abstractmethod
-    def delete_document(self, document_id: str) -> None: ...
+    def delete_document(
+        self, document_id: str, uploaded_by: str | None = None
+    ) -> None: ...

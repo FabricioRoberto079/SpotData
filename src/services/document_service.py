@@ -1,8 +1,8 @@
 import logging
 
 from fastapi import Depends
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 
 from src.data.postgres_client import get_session
 from src.enums.content_type import ContentType
@@ -35,10 +35,6 @@ class DocumentService(IDocumentService):
         self._vector_index = vector_index
         self._cache = cache
 
-    @staticmethod
-    def _version_marker(document_id: str, version_number: int) -> str:
-        return f"{document_id}:{version_number}"
-
     def _next_version_number(self, document_id: str) -> int:
         stmt = select(DocumentVersion.version_number).where(
             DocumentVersion.document_id == document_id
@@ -47,16 +43,23 @@ class DocumentService(IDocumentService):
         return (max(existing) + 1) if existing else 1
 
     def _demote_previous_versions(self, document_id: str) -> None:
-        stmt = select(DocumentVersion).where(
-            DocumentVersion.document_id == document_id,
-            DocumentVersion.vector_id.is_not(None),
-        )
-        previous = self._session.execute(stmt).scalars().all()
-        if not previous:
-            return
         self._vector_index.demote_latest(document_id)
-        for v in previous:
-            v.vector_id = None
+
+    def _load_owned(
+        self, document_id: str, uploaded_by: str | None
+    ) -> KnowledgeDocument:
+        """Load a document or raise NotFoundError. When uploaded_by is given, treats
+        docs owned by other users as if they did not exist (avoids leaking existence)."""
+        doc = self._session.get(KnowledgeDocument, document_id)
+        if doc is None:
+            raise NotFoundError(f"Document not found: {document_id}")
+        if (
+            uploaded_by is not None
+            and doc.uploaded_by is not None
+            and doc.uploaded_by != uploaded_by
+        ):
+            raise NotFoundError(f"Document not found: {document_id}")
+        return doc
 
     @staticmethod
     def _serialize_document(doc: KnowledgeDocument) -> dict:
@@ -104,7 +107,14 @@ class DocumentService(IDocumentService):
         if not text:
             raise ValidationError("No text extracted from uploaded content.")
 
-        chunks, embeddings = self._vector_index.prepare(text)
+        pages = self._text_extractor.extract_pages_from_bytes(file_data, content_type)
+        if pages:
+            chunks, embeddings, pages_per_chunk = self._vector_index.prepare_paged(
+                pages
+            )
+        else:
+            chunks, embeddings = self._vector_index.prepare(text)
+            pages_per_chunk = None
 
         try:
             doc = self._session.get(KnowledgeDocument, document_id)
@@ -118,12 +128,13 @@ class DocumentService(IDocumentService):
                 content_type=content_type.value,
                 file_data=file_data,
                 extracted_text=text,
-                vectorization_status=VectorizationStatus.PENDING.value,
+                vectorization_status=VectorizationStatus.COMPLETED.value,
             )
             self._session.add(version)
             self._session.flush()
 
-            self._demote_previous_versions(document_id)
+            if version_number > 1:
+                self._demote_previous_versions(document_id)
             chunk_count = self._vector_index.commit(
                 document_id=document_id,
                 version_number=version_number,
@@ -131,31 +142,28 @@ class DocumentService(IDocumentService):
                 content_type=content_type.value,
                 chunks=chunks,
                 embeddings=embeddings,
+                pages_per_chunk=pages_per_chunk,
             )
-
-            version.vector_id = self._version_marker(document_id, version_number)
-            version.vectorization_status = VectorizationStatus.COMPLETED.value
             self._session.commit()
-
-            self._cache.invalidate_all()
-
-            logger.info(
-                "indexed document=%s version=%d chunks=%d",
-                document_id,
-                version_number,
-                chunk_count,
-            )
-            return {
-                "id": version.id,
-                "document_id": document_id,
-                "version_number": version_number,
-                "vectorization_status": version.vectorization_status,
-                "content_type": version.content_type,
-                "chunk_count": chunk_count,
-            }
         except Exception:
             self._session.rollback()
             raise
+
+        self._cache.invalidate_all()
+        logger.info(
+            "indexed document=%s version=%d chunks=%d",
+            document_id,
+            version_number,
+            chunk_count,
+        )
+        return {
+            "id": version.id,
+            "document_id": document_id,
+            "version_number": version_number,
+            "vectorization_status": version.vectorization_status,
+            "content_type": version.content_type,
+            "chunk_count": chunk_count,
+        }
 
     def _find_existing_document(
         self, file_name: str, uploaded_by: str | None
@@ -176,11 +184,8 @@ class DocumentService(IDocumentService):
         category: DocumentCategory,
         uploaded_by: str | None = None,
     ) -> dict:
-        text = self._text_extractor.extract_from_bytes(file_data, content_type)
-        if not text:
-            raise ValidationError("No text extracted from uploaded content.")
-        self._vector_index.prepare(text)
-
+        # Extraction/embedding happen inside add_version; calling them here just to
+        # validate would double the cost (the embedding API runs twice).
         existing = self._find_existing_document(file_name, uploaded_by)
         if existing is not None:
             version = self.add_version(existing.id, file_data, content_type)
@@ -217,11 +222,12 @@ class DocumentService(IDocumentService):
         }
 
     def get_version_file(
-        self, document_id: str, version_number: int | None = None
+        self,
+        document_id: str,
+        version_number: int | None = None,
+        uploaded_by: str | None = None,
     ) -> tuple[bytes, str, str, int]:
-        doc = self._session.get(KnowledgeDocument, document_id)
-        if doc is None:
-            raise NotFoundError(f"Document not found: {document_id}")
+        doc = self._load_owned(document_id, uploaded_by)
         if not doc.versions:
             raise NotFoundError(f"Document {document_id} has no versions.")
 
@@ -247,13 +253,26 @@ class DocumentService(IDocumentService):
         category: DocumentCategory | None = None,
         limit: int = 50,
         offset: int = 0,
+        uploaded_by: str | None = None,
     ) -> dict:
-        stmt = select(KnowledgeDocument)
+        filters = []
         if category is not None:
-            stmt = stmt.where(KnowledgeDocument.category == category.value)
-        total = len(self._session.execute(stmt).scalars().all())
+            filters.append(KnowledgeDocument.category == category.value)
+        if uploaded_by is not None:
+            filters.append(KnowledgeDocument.uploaded_by == uploaded_by)
+
+        count_stmt = select(func.count()).select_from(KnowledgeDocument)
+        if filters:
+            count_stmt = count_stmt.where(*filters)
+        total = self._session.execute(count_stmt).scalar_one()
+
+        page_stmt = select(KnowledgeDocument).options(
+            selectinload(KnowledgeDocument.versions)
+        )
+        if filters:
+            page_stmt = page_stmt.where(*filters)
         page_stmt = (
-            stmt.order_by(KnowledgeDocument.created_at.desc())
+            page_stmt.order_by(KnowledgeDocument.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -265,32 +284,24 @@ class DocumentService(IDocumentService):
             "offset": offset,
         }
 
-    def get_document(self, document_id: str) -> dict:
-        doc = self._session.get(KnowledgeDocument, document_id)
-        if doc is None:
-            raise NotFoundError(f"Document not found: {document_id}")
+    def get_document(
+        self, document_id: str, uploaded_by: str | None = None
+    ) -> dict:
+        doc = self._load_owned(document_id, uploaded_by)
         return self._serialize_document(doc)
 
-    def delete_document(self, document_id: str) -> None:
+    def delete_document(
+        self, document_id: str, uploaded_by: str | None = None
+    ) -> None:
         try:
-            doc = self._session.get(KnowledgeDocument, document_id)
-            if doc is None:
-                raise NotFoundError(f"Document not found: {document_id}")
-
-            try:
-                self._vector_index.purge_document(document_id)
-            except Exception:
-                logger.exception(
-                    "failed to remove Chroma vectors for document=%s — may leave orphans",
-                    document_id,
-                )
-
+            doc = self._load_owned(document_id, uploaded_by)
+            self._vector_index.purge_document(document_id)
             self._session.delete(doc)
             self._session.commit()
-            self._cache.invalidate_all()
         except Exception:
             self._session.rollback()
             raise
+        self._cache.invalidate_all()
 
 
 def get_document_service(
