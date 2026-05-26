@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: spotdata-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER required}
@@ -16,26 +16,11 @@ services:
       timeout: 5s
       retries: 10
 
-  chromadb:
-    image: chromadb/chroma:1.5.7
-    container_name: spotdata-chromadb
-    ports:
-      - "8000:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    healthcheck:
-      test: ["CMD", "/bin/bash", "-c", "cat < /dev/null > /dev/tcp/localhost/8000"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-
   api:
     build: .
     container_name: spotdata-api
     depends_on:
       postgres:
-        condition: service_healthy
-      chromadb:
         condition: service_healthy
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER required}
@@ -43,11 +28,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB required}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      CHROMA_HOST: chromadb
-      CHROMA_PORT: 8000
       LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:?LLM_CHAT_MODEL required}
       LLM_STRUCTURED_MODEL: ${LLM_STRUCTURED_MODEL}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:?LLM_EMBEDDING_MODEL required}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:?EMBEDDING_DIMENSION required}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -64,4 +48,3 @@ services:
 
 volumes:
   postgres_data:
-  chroma_data:
