@@ -5,19 +5,29 @@ from src.enums.document_category import DocumentCategory
 from src.exceptions import NotFoundError, ValidationError
 from src.interfaces.text_extractor import ITextExtractor
 from src.interfaces.vector_index_service import IVectorIndexService
+from src.models.user import User
 from src.services.document_service import DocumentService
 from tests.conftest import StubQaCache
 
 
-class _StubExtractor(ITextExtractor):
-    def __init__(self, text: str = "extracted"):
-        self.text = text
+def _seed_user(session, user_id: str) -> str:
+    session.add(
+        User(id=user_id, name=user_id, email=f"{user_id}@x.com", password_hash="!disabled!")
+    )
+    session.commit()
+    return user_id
 
-    def extract_from_path(self, file_path, content_type):
-        return self.text
+
+class _StubExtractor(ITextExtractor):
+    def __init__(self, text: str = "extracted", pages: list[str] | None = None):
+        self.text = text
+        self.pages = pages
 
     def extract_from_bytes(self, data, content_type):
         return self.text
+
+    def extract_pages_from_bytes(self, data, content_type):
+        return self.pages
 
 
 class _StubIndex(IVectorIndexService):
@@ -25,12 +35,31 @@ class _StubIndex(IVectorIndexService):
         self.indexed: list[tuple] = []
         self.demoted: list[str] = []
         self.purged: list[str] = []
+        self.last_pages_per_chunk: list[int | None] | None = None
 
     def prepare(self, text):
         return ([text, text, text], [[0.0] * 4, [0.0] * 4, [0.0] * 4])
 
-    def commit(self, document_id, version_number, file_name, content_type, chunks, embeddings):
+    def prepare_paged(self, pages):
+        chunks = [p for p in pages if p and p.strip()]
+        pages_per_chunk = list(range(1, len(chunks) + 1))
+        embeddings = [[0.0] * 4 for _ in chunks]
+        return chunks, embeddings, pages_per_chunk
+
+    def commit(
+        self,
+        document_id,
+        version_number,
+        file_name,
+        content_type,
+        chunks,
+        embeddings,
+        pages_per_chunk=None,
+    ):
         self.indexed.append((document_id, version_number, chunks[0]))
+        self.last_pages_per_chunk = (
+            list(pages_per_chunk) if pages_per_chunk is not None else None
+        )
         return len(chunks)
 
     def demote_latest(self, document_id):
@@ -110,12 +139,13 @@ def test_delete_purges_vectors_and_removes_doc(session):
 
 
 def test_upload_same_filename_reuses_document_as_new_version(session):
+    user = _seed_user(session, "user-1")
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     first = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, "user-1"
+        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user
     )
     second = svc.upload_new_document(
-        b"v2", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, "user-1"
+        b"v2", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user
     )
     assert first["created"] is True
     assert second["created"] is False
@@ -124,12 +154,14 @@ def test_upload_same_filename_reuses_document_as_new_version(session):
 
 
 def test_upload_same_filename_different_users_creates_separate_docs(session):
+    u1 = _seed_user(session, "user-1")
+    u2 = _seed_user(session, "user-2")
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     a = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, "user-1"
+        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u1
     )
     b = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, "user-2"
+        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u2
     )
     assert a["document_id"] != b["document_id"]
     assert a["created"] is True
@@ -143,6 +175,29 @@ def test_add_version_invalidates_cache(session):
     before = cache.invalidate_calls
     svc.add_version(doc_id, b"raw", ContentType.TEXTO)
     assert cache.invalidate_calls == before + 1
+
+
+def test_add_version_uses_paged_pipeline_when_pages_available(session):
+    pages = ["primeira página", "segunda página", "terceira"]
+    extractor = _StubExtractor("texto inteiro", pages=pages)
+    index = _StubIndex()
+    svc = DocumentService(session, extractor, index, StubQaCache())
+    doc_id = svc.create_document("manual.pdf", DocumentCategory.DOCUMENTS)
+
+    svc.add_version(doc_id, b"raw", ContentType.PDF)
+
+    assert index.last_pages_per_chunk == [1, 2, 3]
+
+
+def test_add_version_no_pages_falls_back_to_flat(session):
+    extractor = _StubExtractor("conteúdo plano", pages=None)
+    index = _StubIndex()
+    svc = DocumentService(session, extractor, index, StubQaCache())
+    doc_id = svc.create_document("nota.txt", DocumentCategory.TEXT)
+
+    svc.add_version(doc_id, b"raw", ContentType.TEXTO)
+
+    assert index.last_pages_per_chunk is None
 
 
 def test_delete_document_invalidates_cache(session):
