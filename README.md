@@ -81,9 +81,17 @@ Sobe Postgres (com pgvector) + API juntos.
 
 ## Fluxo
 
-**Ingestão:** `upload → TextExtractor → TextChunker → embeddings → tabela `vector_chunks` (pgvector)` (chunks da versão atual marcados `is_latest=true`). Postgres também guarda metadata e bytes do arquivo (`document_versions.file_data`).
+**Ingestão:** `upload → TextExtractor → TextChunker → embeddings → tabela vector_chunks (pgvector)` (chunks da versão atual marcados `is_latest=true`, com `tsv` populado para BM25). Postgres guarda metadata e bytes do arquivo (`document_versions.file_data`).
 
-**Pergunta:** `POST /chats/messages` → busca semântica via pgvector (`<=>` cosine distance, top-15 chunks) → LLM (structured output `RagAnswer`) devolve `{status, answer, citations}` em uma chamada → gate pós-LLM: rejeita se `status != success`, citações vazias, ou todas com `confidence_score < 0.5` → se passa, emite um stream chunked (`text/event-stream`, um JSON por linha) com `citation` events e depois o `answer` em chunks de 40 chars → persiste `Query + Response + EvidenceCitation`. Se o `chat_id` for omitido, o chat é criado na hora com título derivado da pergunta. Histórico das últimas 10 mensagens entra como contexto (turnos com `insufficient_information` são pulados pra não poluir). Saudações, chitchat ou perguntas fora dos docs → `status=insufficient_information`, **nenhum** evento `token` é emitido.
+**Pergunta:** `POST /chats/messages` →
+1. **QA cache**: lookup exato por hash da pergunta normalizada; se miss, embed da pergunta + lookup semântico (pgvector) em `qa_cache_entries`. Cache hit serve a resposta direto sem chamar o LLM.
+2. **Busca híbrida** (`RAG_TOP_K=10` chunks): cosine distance via pgvector + BM25 via `ts_rank_cd` (Portuguese FTS), fundidos por **Reciprocal Rank Fusion** (`HYBRID_CANDIDATE_K=60` de cada lado, `RRF_K=60`).
+3. **LLM** (structured output `RagAnswer` via OpenAI strict `json_schema`): devolve `{citations:[{context_index, confidence}], answer}`. O schema tem `citations` **antes** de `answer` — o decoding constrained emite primeiro o array de citações e depois o texto da resposta.
+4. **Stream NDJSON** (`text/event-stream`, um JSON por linha): emite `meta` → `citations` (logo que o LLM fecha o array, antes da resposta) → `token` (deltas reais token-a-token via langchain `JsonOutputParser`) → `done`.
+5. **Persistência**: `Query + Response + EvidenceCitation`. Citações com `confidence < MIN_CITATION_CONFIDENCE` (0.6) são descartadas. Se nenhuma citação sobrevive, o stream para antes de emitir qualquer token → `insufficient_information` (não há resposta sem fonte).
+6. **QA cache write-through**: respostas `success` viram entrada no cache pra acelerar perguntas futuras.
+
+Histórico das últimas 10 mensagens entra como contexto (turnos sem resposta válida são pulados). Saudações/chitchat/fora-do-corpus → `answer=""`, `citations=[]`, `status=insufficient_information` (sem `token` events).
 
 ---
 
@@ -101,38 +109,41 @@ Auth obrigatória (JWT) em tudo, exceto `POST /auth/register`, `POST /auth/login
 
 > Não existe `POST /chats` — chat é criado pela primeira mensagem. `PATCH /chats/{id}` permite renomear ou mover de pasta depois.
 
-### Resposta de `POST /chats/messages` (HTTP chunked stream)
+### Resposta de `POST /chats/messages` (NDJSON stream)
 
 Content-Type: `text/event-stream`. Cada linha do corpo é um **objeto JSON inteiro** (uma linha = um evento — não usa o formato SSE `data:` / `event:`). Eventos possíveis:
 
 | `type` | Quando | Payload |
 |---|---|---|
 | `meta` | sempre, primeiro evento | `chat_id`, `query_id`, `response_id` |
-| `citation` | uma por citação devolvida pelo LLM, emitidas **antes** dos tokens | `citation` |
-| `token` | chunks de 40 chars do `answer` (cache hit ou resposta nova) | `content` |
-| `done` | sempre, último evento | `status`, `time_ms` |
+| `citations` | uma vez, **antes** dos tokens | `citations` (array completo de objetos resolvidos com `document_id`, `document_version_id`, `version_number`, `file_name`, `page`, `excerpt`, `confidence_score`, `download_url`) |
+| `token` | deltas token-a-token do `answer` (texto crescendo) | `content` |
+| `done` | sempre, último evento | `status` (`success` \| `insufficient_information` \| `error`), `time_ms` |
 | `error` | só em falha de LLM | `kind`, `message` |
 
 **Gates:**
-1. **Pré-LLM por distance** — se `vector_search` retorna 0 contexts ou o melhor `distance` > 0.7, devolve `insufficient_information` direto, sem chamar o LLM.
-2. **Pós-LLM por status** — se o LLM (com structured output `RagAnswer`) devolve `status != success` ou citações vazias (saudações, chitchat, pergunta fora dos docs), devolve `insufficient_information` sem emitir nenhum `token`.
+1. **Sem contexto** — se a busca híbrida não retorna chunk algum, devolve `insufficient_information` sem chamar o LLM.
+2. **Sem citação fundamentada** — se nenhuma citação sobrevive ao filtro `MIN_CITATION_CONFIDENCE=0.6` (saudações, chitchat, pergunta fora dos docs), o stream é interrompido antes de qualquer `token` e devolve `insufficient_information`. Como as citações vêm antes do `answer` no schema, isso é detectado sem vazar texto.
 
 **Exemplo (sucesso):**
 ```
 {"type":"meta","chat_id":"...","query_id":"...","response_id":"..."}
-{"type":"citation","citation":{"document_id":"...","page":4,"excerpt":"...","confidence_score":0.93,"file_name":"x.pdf"}}
-{"type":"token","content":"A meta de "}
-{"type":"token","content":"2026 é..."}
+{"type":"citations","citations":[{"document_id":"...","page":4,"excerpt":"...","confidence_score":0.93,"file_name":"x.pdf","download_url":"/documents/.../download"}]}
+{"type":"token","content":"A "}
+{"type":"token","content":"==**meta**=="}
+{"type":"token","content":" de "}
+{"type":"token","content":"2026..."}
 {"type":"done","status":"success","time_ms":1840}
 ```
 
 **Exemplo (sem fundamento nos docs):**
 ```
 {"type":"meta",...}
+{"type":"citations","citations":[]}
 {"type":"done","status":"insufficient_information","time_ms":210}
 ```
 
-> Em `insufficient_information` nenhum evento `token` é emitido — o frontend deve renderizar a mensagem de "sem informação" baseado no `status` final.
+> Em `insufficient_information` nenhum `token` é emitido. O frontend renderiza estado vazio baseado no `status` do `done`.
 
 ---
 
@@ -153,11 +164,9 @@ src/mcp/
 
 | Tool | Args | Retorno |
 |---|---|---|
-| `ask_question` | `question`, `chat_id?`, `n_results?` | mesmo payload de `POST /chats/messages` |
+| `ask_question` | `question`, `chat_id?` | dict com `chat_id`, `query_id`, `response_id`, `question`, `status`, `answer`, `citations`, `time_ms` |
 
-**Auth:** o MCP server lê `SPOTDATA_JWT` do ambiente — é o mesmo `access_token`
-retornado por `POST /auth/login`. Quando o token expira, gere outro e atualize
-a env. Sem `SPOTDATA_JWT`, qualquer chamada à tool falha.
+**Auth:** cada chamada precisa de um `Authorization: Bearer <JWT>` no request HTTP do MCP — o mesmo `access_token` retornado por `POST /auth/login`. O `user_id` sai do `sub` do token. Não há fallback de env var.
 
 **Configurar:**
 
@@ -166,13 +175,11 @@ a env. Sem `SPOTDATA_JWT`, qualquer chamada à tool falha.
 curl -s -X POST http://localhost:8080/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"...","password":"..."}' | jq -r .access_token
-# 2. exportar no env do processo da API
-export SPOTDATA_JWT=<token>
-# 3. (re)subir a API — `/mcp` fica disponível no mesmo host
+# 2. apontar o cliente MCP pra http://<host>:8080/mcp com o header
+#    Authorization: Bearer <token-do-passo-1>
 ```
 
-Aponte qualquer cliente MCP (Claude Desktop, etc.) pro endpoint
-`http://<host>:8080/mcp`.
+Aponte qualquer cliente MCP (Claude Desktop, etc.) pro endpoint `http://<host>:8080/mcp` enviando o Bearer token.
 
 ---
 
@@ -205,7 +212,6 @@ alembic downgrade -1
 ## Pendências
 
 - Object storage (S3/MinIO) — hoje arquivos são `LargeBinary` no Postgres
-- Testes automatizados
 - Rate limiting no endpoint de LLM
 - CI (lint, type-check, tests)
 - Autorização granular (ACL por documento/pasta/chat)
