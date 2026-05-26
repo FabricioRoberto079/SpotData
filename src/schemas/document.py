@@ -19,16 +19,7 @@ class DocumentList(BaseModel):
     offset: int
 
 
-class DocumentVersionOut(BaseModel):
-    id: str
-    version_number: int
-    content_type: str
-    vectorization_status: str
-    created_at: str | None = None
-
-
 class SearchHit(BaseModel):
-    vector_id: str
     document_id: str | None = None
     version_number: int | None = None
     chunk_index: int | None = None

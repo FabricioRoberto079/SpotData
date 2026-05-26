@@ -21,6 +21,5 @@ class DocumentVersion(BaseModel):
     vectorization_status: Mapped[str] = mapped_column(
         String, default=VectorizationStatus.PENDING, nullable=False
     )
-    vector_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     document: Mapped["KnowledgeDocument"] = relationship(back_populates="versions")

@@ -11,9 +11,6 @@ class _Stub(IContentExtractor):
         self.value = value
         self.from_bytes_calls: list[bytes] = []
 
-    def from_path(self, file_path):
-        return self.value
-
     def from_bytes(self, data):
         self.from_bytes_calls.append(data)
         return self.value
@@ -38,3 +35,47 @@ def test_plain_text_extractor_decodes_utf8():
     from src.services.extractors.plain_text import PlainTextExtractor
 
     assert PlainTextExtractor().from_bytes("olá".encode("utf-8")) == "olá"
+
+
+def test_word_extractor_splits_docx_on_manual_page_break():
+    import io
+
+    from docx import Document
+    from docx.enum.text import WD_BREAK
+
+    from src.services.extractors.word import WordExtractor
+
+    doc = Document()
+    doc.add_paragraph("primeira página")
+    p = doc.add_paragraph()
+    p.add_run().add_break(WD_BREAK.PAGE)
+    doc.add_paragraph("segunda página")
+    p = doc.add_paragraph()
+    p.add_run().add_break(WD_BREAK.PAGE)
+    doc.add_paragraph("terceira página")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    data = buf.getvalue()
+
+    pages = WordExtractor().pages_from_bytes(data)
+    assert pages is not None
+    assert len(pages) == 3
+    assert "primeira página" in pages[0]
+    assert "segunda página" in pages[1]
+    assert "terceira página" in pages[2]
+
+
+def test_word_extractor_returns_none_for_single_page_docx():
+    import io
+
+    from docx import Document
+
+    from src.services.extractors.word import WordExtractor
+
+    doc = Document()
+    doc.add_paragraph("apenas uma página, sem quebras")
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    assert WordExtractor().pages_from_bytes(buf.getvalue()) is None

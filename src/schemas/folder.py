@@ -15,4 +15,14 @@ class FolderNode(FolderOut):
     children: list["FolderNode"] = Field(default_factory=list)
 
 
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    parent_id: str | None = None
+
+
+class FolderUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    parent_id: str | None = None
+
+
 FolderNode.model_rebuild()

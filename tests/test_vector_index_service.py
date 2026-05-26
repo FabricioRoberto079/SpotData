@@ -1,18 +1,45 @@
 import pytest
+from sqlalchemy import select
 
+from src.enums.document_category import DocumentCategory
 from src.exceptions import ValidationError
+from src.models.knowledge_document import KnowledgeDocument
+from src.models.vector_chunk import VectorChunk
 from src.services.text_chunker import TextChunker
 from src.services.vector_index_service import VectorIndexService
 
 
-def test_prepare_then_commit_pushes_chunks_to_collection(
-    session, fake_collection, fake_llm
-):
+def _seed_document(session, doc_id: str = "doc-1") -> None:
+    session.add(
+        KnowledgeDocument(
+            id=doc_id, file_name="x.txt", category=DocumentCategory.DOCUMENTS.value
+        )
+    )
+    session.commit()
+
+
+def test_prepare_chunks_and_embeds(session, fake_llm):
     svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
     chunks, embeddings = svc.prepare(
         "Frase um. Frase dois. Frase tres. Frase quatro."
     )
-    chunk_count = svc.commit(
+    assert len(chunks) >= 1
+    assert len(embeddings) == len(chunks)
+
+
+def test_prepare_empty_text_raises_validation(session, fake_llm):
+    svc = VectorIndexService(session, TextChunker(), fake_llm)
+    with pytest.raises(ValidationError):
+        svc.prepare("")
+
+
+def test_commit_persists_chunks_with_is_latest(session, fake_llm):
+    _seed_document(session)
+    svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
+    chunks, embeddings = svc.prepare(
+        "Frase um. Frase dois. Frase tres. Frase quatro."
+    )
+    count = svc.commit(
         document_id="doc-1",
         version_number=1,
         file_name="x.txt",
@@ -20,34 +47,73 @@ def test_prepare_then_commit_pushes_chunks_to_collection(
         chunks=chunks,
         embeddings=embeddings,
     )
-    assert chunk_count >= 1
-    assert len(fake_collection.upserts) == 1
-    upsert = fake_collection.upserts[0]
-    assert all(m["is_latest"] for m in upsert["metadatas"])
-    assert all(m["document_id"] == "doc-1" for m in upsert["metadatas"])
+    rows = session.execute(select(VectorChunk)).scalars().all()
+    assert count == len(rows) >= 1
+    assert all(r.document_id == "doc-1" for r in rows)
+    assert all(r.is_latest for r in rows)
 
 
-def test_prepare_empty_text_raises_validation(session, fake_collection, fake_llm):
-    svc = VectorIndexService(session, TextChunker(), fake_llm)
-    with pytest.raises(ValidationError):
-        svc.prepare("")
+def test_commit_is_idempotent_per_version(session, fake_llm):
+    _seed_document(session)
+    svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
+    chunks, embeddings = svc.prepare("Frase um. Frase dois.")
+    svc.commit(
+        document_id="doc-1",
+        version_number=1,
+        file_name="x.txt",
+        content_type="texto",
+        chunks=chunks,
+        embeddings=embeddings,
+    )
+    first_count = session.execute(select(VectorChunk)).scalars().all()
+    svc.commit(
+        document_id="doc-1",
+        version_number=1,
+        file_name="x.txt",
+        content_type="texto",
+        chunks=chunks,
+        embeddings=embeddings,
+    )
+    second_count = session.execute(select(VectorChunk)).scalars().all()
+    assert len(second_count) == len(first_count)
 
 
-def test_demote_latest_calls_chroma(session, fake_collection, fake_llm):
-    svc = VectorIndexService(session, TextChunker(), fake_llm)
+def test_demote_latest_flips_flag(session, fake_llm):
+    _seed_document(session)
+    svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
+    chunks, embeddings = svc.prepare("Texto curto.")
+    svc.commit(
+        document_id="doc-1",
+        version_number=1,
+        file_name="x.txt",
+        content_type="texto",
+        chunks=chunks,
+        embeddings=embeddings,
+    )
     svc.demote_latest("doc-1")
-    assert fake_collection.deletes == [
-        {"$and": [{"document_id": "doc-1"}, {"is_latest": True}]}
-    ]
+    rows = session.execute(select(VectorChunk)).scalars().all()
+    assert rows
+    assert all(not r.is_latest for r in rows)
 
 
-def test_purge_document_calls_chroma(session, fake_collection, fake_llm):
-    svc = VectorIndexService(session, TextChunker(), fake_llm)
+def test_purge_document_removes_all_chunks(session, fake_llm):
+    _seed_document(session)
+    svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
+    chunks, embeddings = svc.prepare("Texto curto.")
+    svc.commit(
+        document_id="doc-1",
+        version_number=1,
+        file_name="x.txt",
+        content_type="texto",
+        chunks=chunks,
+        embeddings=embeddings,
+    )
     svc.purge_document("doc-1")
-    assert fake_collection.deletes == [{"document_id": "doc-1"}]
+    rows = session.execute(select(VectorChunk)).scalars().all()
+    assert rows == []
 
 
-def test_search_empty_query_returns_empty(session, fake_collection, fake_llm):
+def test_search_empty_query_returns_empty(session, fake_llm):
     svc = VectorIndexService(session, TextChunker(), fake_llm)
     assert svc.search("") == []
     assert svc.search("   ") == []

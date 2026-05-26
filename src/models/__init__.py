@@ -7,6 +7,8 @@ from src.models.chat import Chat
 from src.models.query import Query
 from src.models.response import Response
 from src.models.evidence_citation import EvidenceCitation
+from src.models.vector_chunk import VectorChunk
+from src.models.qa_cache_entry import QaCacheEntry
 
 __all__ = [
     "Base",
@@ -19,4 +21,6 @@ __all__ = [
     "Query",
     "Response",
     "EvidenceCitation",
+    "VectorChunk",
+    "QaCacheEntry",
 ]

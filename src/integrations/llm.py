@@ -4,18 +4,24 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Callable, TypeVar
+from typing import Any, AsyncIterator, Callable
 
 from langchain.chat_models import init_chat_model
 from langchain.embeddings import init_embeddings
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel, ValidationError
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
+from langchain_core.utils.function_calling import convert_to_openai_function
+from pydantic import ValidationError
+
+from src.config import required_env
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T", bound=BaseModel)
 
 
 @dataclass
@@ -29,13 +35,6 @@ class LlmError(Exception):
         return f"[{self.kind}] {self.detail}"
 
 
-def _required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required env var: {name}")
-    return value
-
-
 def _resolve_chat_spec(model: str | None, *, structured: bool = False) -> str:
     if model:
         return model
@@ -43,11 +42,11 @@ def _resolve_chat_spec(model: str | None, *, structured: bool = False) -> str:
         spec = os.getenv("LLM_STRUCTURED_MODEL")
         if spec:
             return spec
-    return _required_env("LLM_CHAT_MODEL")
+    return required_env("LLM_CHAT_MODEL")
 
 
 def _resolve_embedding_spec(model: str | None) -> str:
-    return model or _required_env("LLM_EMBEDDING_MODEL")
+    return model or required_env("LLM_EMBEDDING_MODEL")
 
 
 @lru_cache(maxsize=8)
@@ -128,44 +127,47 @@ def _wrap(call: Callable):
 
 
 class LlmClient:
-    def chat(
+    async def chat_stream_structured(
         self,
         messages: list[dict],
-        model: str | None = None,
-        temperature: float = 0.2,
-        max_tokens: int | None = None,
-    ) -> str:
-        llm = _get_chat_model(_resolve_chat_spec(model), temperature, max_tokens)
-        result = _wrap(lambda: llm.invoke(_convert_messages(messages)))
-        content = getattr(result, "content", None)
-        if not content:
-            raise LlmError("empty", 502, "Empty response from model.")
-        return content if isinstance(content, str) else str(content)
-
-    def chat_structured(
-        self,
-        messages: list[dict],
-        response_model: type[T],
+        schema: Any,
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-    ) -> T:
-        llm = _get_chat_model(
-            _resolve_chat_spec(model, structured=True), temperature, max_tokens
-        )
-        structured = llm.with_structured_output(response_model)
-        result = _wrap(lambda: structured.invoke(_convert_messages(messages)))
+    ) -> AsyncIterator[Any]:
+        spec = _resolve_chat_spec(model, structured=True)
+        llm = _get_chat_model(spec, temperature, max_tokens)
 
-        if isinstance(result, response_model):
-            return result
-        if isinstance(result, dict):
+        # Pass schema as dict on the OpenAI path so langchain wires
+        # JsonOutputParser (partial dicts during astream) instead of the
+        # non-streaming Pydantic parser.
+        schema_arg: Any = schema
+        if spec.startswith("openai:") and isinstance(schema, type):
+            fn = convert_to_openai_function(schema, strict=True)
+            schema_arg = {
+                "name": fn["name"],
+                "schema": fn["parameters"],
+                "strict": True,
+            }
+            if "description" in fn:
+                schema_arg["description"] = fn["description"]
+
+        if spec.startswith("openai:"):
             try:
-                return response_model.model_validate(result)
-            except ValidationError as e:
-                raise LlmError(
-                    "schema", 502, f"Response does not match schema: {e}", e
-                ) from e
-        raise LlmError("schema", 502, "Invalid structured response.")
+                structured = llm.with_structured_output(schema_arg, strict=True)
+            except TypeError:
+                structured = llm.with_structured_output(schema_arg)
+        else:
+            structured = llm.with_structured_output(schema)
+        converted = _convert_messages(messages)
+
+        try:
+            async for partial in structured.astream(converted):
+                yield partial
+        except LlmError:
+            raise
+        except Exception as e:
+            raise _classify(e) from e
 
     def embed(
         self,
@@ -193,10 +195,3 @@ def get_llm_client() -> LlmClient:
     if _client_singleton is None:
         _client_singleton = LlmClient()
     return _client_singleton
-
-
-def reset_llm_client() -> None:
-    global _client_singleton
-    _client_singleton = None
-    _get_chat_model.cache_clear()
-    _get_embeddings.cache_clear()

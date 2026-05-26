@@ -1,6 +1,8 @@
 import pytest
 
 from src.exceptions import ConflictError, NotFoundError
+from src.models.chat import Chat
+from src.models.chat_folder import ChatFolder
 from src.services.folder_service import ChatFolderService
 
 
@@ -66,9 +68,26 @@ def test_update_move_to_descendant_raises_conflict(session):
         svc.update(a["id"], {"parent_id": b["id"]})
 
 
-def test_delete_with_subfolders_raises_conflict(session):
+def test_delete_cascades_subfolders_and_chats(session):
     svc = ChatFolderService(session)
-    a = svc.create("A")
-    svc.create("B", parent_id=a["id"])
-    with pytest.raises(ConflictError):
-        svc.delete(a["id"])
+    parent = svc.create("Parent")
+    child = svc.create("Child", parent_id=parent["id"])
+
+    chat_in_parent = Chat(title="parent-chat", folder_id=parent["id"])
+    chat_in_child = Chat(title="child-chat", folder_id=child["id"])
+    session.add_all([chat_in_parent, chat_in_child])
+    session.commit()
+    parent_chat_id = chat_in_parent.id
+    child_chat_id = chat_in_child.id
+
+    svc.delete(parent["id"])
+
+    assert session.get(ChatFolder, parent["id"]) is None
+    assert session.get(ChatFolder, child["id"]) is None
+    assert session.get(Chat, parent_chat_id) is None
+    assert session.get(Chat, child_chat_id) is None
+
+
+def test_delete_missing_folder_raises_not_found(session):
+    with pytest.raises(NotFoundError):
+        ChatFolderService(session).delete("nope")

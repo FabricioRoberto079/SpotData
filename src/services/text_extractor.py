@@ -25,11 +25,13 @@ class TextExtractor(ITextExtractor):
             raise ValidationError(f"Unsupported type: {content_type}")
         return extractor
 
-    def extract_from_path(self, file_path: str, content_type: ContentType) -> str:
-        return self._resolve(content_type).from_path(file_path)
-
     def extract_from_bytes(self, data: bytes, content_type: ContentType) -> str:
         return self._resolve(content_type).from_bytes(data)
+
+    def extract_pages_from_bytes(
+        self, data: bytes, content_type: ContentType
+    ) -> list[str] | None:
+        return self._resolve(content_type).pages_from_bytes(data)
 
 
 def get_text_extractor() -> ITextExtractor:

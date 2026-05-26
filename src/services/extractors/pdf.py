@@ -7,12 +7,15 @@ from src.interfaces.content_extractor import IContentExtractor
 
 class PdfExtractor(IContentExtractor):
     @staticmethod
-    def _read(reader: PdfReader) -> str:
-        pages = [p.extract_text() for p in reader.pages if p.extract_text()]
-        return "\n".join(pages).strip()
+    def _pages(reader: PdfReader) -> list[str]:
+        return [(p.extract_text() or "").strip() for p in reader.pages]
 
-    def from_path(self, file_path: str) -> str:
-        return self._read(PdfReader(file_path))
+    @classmethod
+    def _read(cls, reader: PdfReader) -> str:
+        return "\n".join(page for page in cls._pages(reader) if page).strip()
 
     def from_bytes(self, data: bytes) -> str:
         return self._read(PdfReader(io.BytesIO(data)))
+
+    def pages_from_bytes(self, data: bytes) -> list[str]:
+        return self._pages(PdfReader(io.BytesIO(data)))

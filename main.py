@@ -1,7 +1,14 @@
+import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 
+import defusedxml
 from dotenv import load_dotenv
+
+# Patch stdlib XML parsers (used transitively by python-docx, pypdf, langchain) so
+# malicious DOCX/PDF uploads can't trigger XXE or billion-laughs attacks.
+defusedxml.defuse_stdlib()
 
 load_dotenv()
 
@@ -9,11 +16,15 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
-from src.controller.auth_controller import router as auth_router
-from src.controller.chat_controller import router as chat_router
-from src.controller.document_controller import router as document_router
-from src.controller.folder_controller import chat_folder_router
+from src.auth import limiter
+from src.controllers.auth_controller import router as auth_router
+from src.controllers.chat_controller import router as chat_router
+from src.controllers.document_controller import router as document_router
+from src.controllers.folder_controller import chat_folder_router
 from src.exceptions import DomainError
 from src.integrations.llm import LlmError
 from src.logging_config import setup_logging
@@ -21,6 +32,24 @@ from src.mcp import mcp_server
 from src.schemas.system import HealthResponse
 
 setup_logging()
+
+
+_REQUIRED_SYSTEM_BINARIES = ("tesseract", "antiword")
+
+
+def _check_system_dependencies() -> None:
+    log = logging.getLogger("spotdata.bootstrap")
+    missing = [b for b in _REQUIRED_SYSTEM_BINARIES if shutil.which(b) is None]
+    if missing:
+        log.warning(
+            "Ferramentas de sistema ausentes no PATH: %s. "
+            "Os uploads que dependem delas vão falhar. "
+            "Veja a seção 'Instalar dependências de sistema' no README.",
+            ", ".join(missing),
+        )
+
+
+_check_system_dependencies()
 
 
 @asynccontextmanager
@@ -32,7 +61,7 @@ API_DESCRIPTION = """\
 SpotData — ingest, organize and query documents using RAG.
 
 **Pipeline:** upload (text / PDF / image with OCR / Word) -> chunking -> embeddings
--> ChromaDB -> semantic search -> structured-output LLM -> response with citations.
+-> Postgres + pgvector -> semantic search -> structured-output LLM -> response with citations.
 Chat model and embedding model are configured via `LLM_CHAT_MODEL` /
 `LLM_EMBEDDING_MODEL` (LangChain format: `<provider>:<model>`).
 
@@ -56,6 +85,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 cors_origins = os.getenv("CORS_ORIGINS")
 if not cors_origins:
     raise RuntimeError("Missing required env var: CORS_ORIGINS")
@@ -72,7 +105,7 @@ app.include_router(document_router)
 app.include_router(chat_folder_router)
 app.include_router(chat_router)
 
-app.mount("/mcp", mcp_server.streamable_http_app())
+mcp_app = mcp_server.streamable_http_app()
 
 
 @app.exception_handler(DomainError)
@@ -89,6 +122,11 @@ async def _llm_error_handler(request: Request, exc: LlmError):
         status_code=exc.status_code,
         content={"detail": {"kind": exc.kind, "message": exc.detail}},
     )
+
+
+mcp_app.add_exception_handler(DomainError, _domain_error_handler)
+mcp_app.add_exception_handler(LlmError, _llm_error_handler)
+app.mount("/mcp", mcp_app)
 
 
 @app.get(

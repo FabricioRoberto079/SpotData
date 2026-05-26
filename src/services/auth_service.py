@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from src.data.postgres_client import get_session
 from src.exceptions import ConflictError, UnauthorizedError
-from src.integrations.auth import hash_password, issue_token, verify_password
+from src.auth import hash_password, issue_token, verify_password
 from src.interfaces.auth_service import IAuthService
 from src.models.user import User
 
@@ -22,9 +22,7 @@ class AuthService(IAuthService):
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def register(
-        self, name: str, email: str, password: str, role: str = "user"
-    ) -> dict:
+    def register(self, name: str, email: str, password: str) -> dict:
         email_norm = email.strip().lower()
         try:
             existing = self._session.execute(
@@ -36,7 +34,7 @@ class AuthService(IAuthService):
             user = User(
                 name=name.strip(),
                 email=email_norm,
-                role=role.strip() or "user",
+                role="user",
                 password_hash=hash_password(password),
             )
             self._session.add(user)

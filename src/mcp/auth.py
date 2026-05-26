@@ -1,26 +1,18 @@
-import os
-
 import jwt
 
-
-def _required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required env var: {name}")
-    return value
+from src.config import required_env
 
 
-def resolve_user_id() -> str:
-    token = _required_env("SPOTDATA_JWT")
-    secret = _required_env("JWT_SECRET")
-    algorithm = _required_env("JWT_ALGORITHM")
+def resolve_user_id_from_token(token: str) -> str:
+    secret = required_env("JWT_SECRET")
+    algorithm = required_env("JWT_ALGORITHM")
     try:
         payload = jwt.decode(token, secret, algorithms=[algorithm])
     except jwt.ExpiredSignatureError as exc:
-        raise RuntimeError("SPOTDATA_JWT expired; reissue it via /auth/login.") from exc
+        raise RuntimeError("JWT expired.") from exc
     except jwt.InvalidTokenError as exc:
-        raise RuntimeError(f"SPOTDATA_JWT invalid: {exc}") from exc
+        raise RuntimeError(f"JWT invalid: {exc}") from exc
     user_id = payload.get("sub")
     if not user_id:
-        raise RuntimeError("SPOTDATA_JWT has no subject claim.")
+        raise RuntimeError("JWT has no subject claim.")
     return user_id

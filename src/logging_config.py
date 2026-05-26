@@ -1,13 +1,11 @@
 import logging
-import os
 import sys
+
+from src.config import required_env
 
 
 def setup_logging() -> None:
-    level = os.getenv("LOG_LEVEL")
-    if not level:
-        raise RuntimeError("Missing required env var: LOG_LEVEL")
-    level = level.upper()
+    level = required_env("LOG_LEVEL").upper()
     root = logging.getLogger()
     if root.handlers:
         return

@@ -24,4 +24,6 @@ class KnowledgeDocument(BaseModel):
         order_by="DocumentVersion.version_number",
         cascade="all, delete-orphan",
     )
-    citations: Mapped[list["EvidenceCitation"]] = relationship(back_populates="document")
+    citations: Mapped[list["EvidenceCitation"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )

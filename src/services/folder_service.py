@@ -34,11 +34,34 @@ class ChatFolderService(IFolderService):
                 roots.append(node)
         return roots
 
-    def _ensure_parent_exists(self, parent_id: str | None) -> None:
+    def _ensure_parent_owned(
+        self, parent_id: str | None, owner_id: str | None
+    ) -> None:
         if parent_id is None:
             return
-        if self._session.get(ChatFolder, parent_id) is None:
+        parent = self._session.get(ChatFolder, parent_id)
+        if parent is None:
             raise NotFoundError(f"Parent folder not found: {parent_id}")
+        if (
+            owner_id is not None
+            and parent.owner_id is not None
+            and parent.owner_id != owner_id
+        ):
+            raise NotFoundError(f"Parent folder not found: {parent_id}")
+
+    def _load_owned(self, folder_id: str, owner_id: str | None) -> ChatFolder:
+        """Load a folder or raise NotFoundError. When owner_id is given, treats folders
+        owned by other users as if they did not exist (avoids leaking existence)."""
+        folder = self._session.get(ChatFolder, folder_id)
+        if folder is None:
+            raise NotFoundError(f"Folder not found: {folder_id}")
+        if (
+            owner_id is not None
+            and folder.owner_id is not None
+            and folder.owner_id != owner_id
+        ):
+            raise NotFoundError(f"Folder not found: {folder_id}")
+        return folder
 
     def _is_descendant(self, candidate_id: str, ancestor_id: str) -> bool:
         current = self._session.get(ChatFolder, candidate_id)
@@ -57,7 +80,7 @@ class ChatFolderService(IFolderService):
         owner_id: str | None = None,
     ) -> dict:
         try:
-            self._ensure_parent_exists(parent_id)
+            self._ensure_parent_owned(parent_id, owner_id)
             folder = ChatFolder(name=name, parent_id=parent_id, owner_id=owner_id)
             self._session.add(folder)
             self._session.commit()
@@ -74,11 +97,11 @@ class ChatFolderService(IFolderService):
         folders = self._session.execute(stmt).scalars().all()
         return self._build_tree(folders)
 
-    def update(self, folder_id: str, fields: dict) -> dict:
+    def update(
+        self, folder_id: str, fields: dict, owner_id: str | None = None
+    ) -> dict:
         try:
-            folder = self._session.get(ChatFolder, folder_id)
-            if folder is None:
-                raise NotFoundError(f"Folder not found: {folder_id}")
+            folder = self._load_owned(folder_id, owner_id)
 
             if "name" in fields and fields["name"] is not None:
                 folder.name = fields["name"]
@@ -88,7 +111,7 @@ class ChatFolderService(IFolderService):
                 if new_parent_id == folder_id:
                     raise ConflictError("Cannot move a folder into itself.")
                 if new_parent_id is not None:
-                    self._ensure_parent_exists(new_parent_id)
+                    self._ensure_parent_owned(new_parent_id, owner_id)
                     if self._is_descendant(new_parent_id, folder_id):
                         raise ConflictError(
                             "Cannot move into a descendant (would create a cycle)."
@@ -102,28 +125,46 @@ class ChatFolderService(IFolderService):
             self._session.rollback()
             raise
 
-    def delete(self, folder_id: str) -> None:
+    def delete(self, folder_id: str, owner_id: str | None = None) -> None:
         try:
-            folder = self._session.get(ChatFolder, folder_id)
-            if folder is None:
-                raise NotFoundError(f"Folder not found: {folder_id}")
-            children = (
-                self._session.execute(
-                    select(ChatFolder).where(ChatFolder.parent_id == folder_id)
-                )
-                .scalars()
-                .all()
-            )
-            if children:
-                raise ConflictError("Folder has subfolders. Remove them first.")
-            if folder.chats:
-                raise ConflictError("Folder has chats. Remove them first.")
-
-            self._session.delete(folder)
+            folder = self._load_owned(folder_id, owner_id)
+            self._delete_recursive(folder, owner_id)
             self._session.commit()
         except Exception:
             self._session.rollback()
             raise
+
+    def _delete_recursive(
+        self, folder: ChatFolder, owner_id: str | None
+    ) -> None:
+        if (
+            owner_id is not None
+            and folder.owner_id is not None
+            and folder.owner_id != owner_id
+        ):
+            raise ConflictError(
+                f"Refusing to cascade-delete folder {folder.id} owned by another user."
+            )
+        children = (
+            self._session.execute(
+                select(ChatFolder).where(ChatFolder.parent_id == folder.id)
+            )
+            .scalars()
+            .all()
+        )
+        for child in children:
+            self._delete_recursive(child, owner_id)
+        for chat in list(folder.chats):
+            if (
+                owner_id is not None
+                and chat.user_id is not None
+                and chat.user_id != owner_id
+            ):
+                raise ConflictError(
+                    f"Refusing to cascade-delete chat {chat.id} owned by another user."
+                )
+            self._session.delete(chat)
+        self._session.delete(folder)
 
 
 def get_chat_folder_service(

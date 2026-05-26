@@ -1,10 +1,11 @@
 import os
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("JWT_SECRET", "test-secret")
+os.environ.setdefault("EMBEDDING_DIMENSION", "4")
 
 from src.integrations.llm import LlmClient
 from src.interfaces.qa_cache import IQaCache, question_key
@@ -12,9 +13,46 @@ from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.base_model import Base
 
 
+def make_structured_partials(
+    answer: str = "",
+    citations: list[dict] | None = None,
+) -> list[dict]:
+    """Emulate the partial dict snapshots that `JsonOutputParser` yields from a
+    `RagAnswer` JSON stream. The schema lists `citations` before `answer`, so:
+
+    1. Citations array grows entry by entry (no `answer` key yet).
+    2. Once the array closes, the `answer` key appears and grows in 2-word chunks.
+    """
+    cits = list(citations or [])
+    partials: list[dict] = []
+
+    for i in range(1, len(cits) + 1):
+        partials.append({"citations": cits[:i]})
+
+    if answer:
+        words = answer.split(" ")
+        current = ""
+        for w in words:
+            current = f"{current} {w}".strip() if current else w
+            partials.append({"citations": cits, "answer": current})
+    else:
+        partials.append({"citations": cits, "answer": ""})
+
+    return partials
+
+
 @pytest.fixture
 def engine():
     eng = create_engine("sqlite:///:memory:")
+
+    # SQLite disables FK enforcement by default; enable it so cascade gaps
+    # surface in tests instead of silently passing.
+    @event.listens_for(eng, "connect")
+    def _enable_sqlite_fk(dbapi_conn, _):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(eng)
     try:
         yield eng
@@ -33,64 +71,26 @@ def session(engine):
 
 
 class FakeLlm(LlmClient):
-    def __init__(self, structured_response=None) -> None:
-        self.structured_response = structured_response
+    def __init__(
+        self,
+        structured_partials: list[dict] | None = None,
+        stream_error: Exception | None = None,
+    ) -> None:
+        self.structured_partials = structured_partials
+        self.stream_error = stream_error
         self.embed_calls: list[list[str]] = []
 
-    def chat(self, messages, model=None, temperature=0.2, max_tokens=None):
-        return "fake answer"
-
-    def chat_structured(
-        self, messages, response_model, model=None, temperature=0.0, max_tokens=None
+    async def chat_stream_structured(
+        self, messages, schema, model=None, temperature=0.0, max_tokens=None
     ):
-        if self.structured_response is None:
-            raise RuntimeError("FakeLlm.structured_response not configured")
-        return self.structured_response
+        if self.stream_error is not None:
+            raise self.stream_error
+        for partial in self.structured_partials or []:
+            yield partial
 
     def embed(self, texts, model=None):
         self.embed_calls.append(list(texts))
         return [[0.0] * 4 for _ in texts]
-
-
-class FakeCollection:
-    def __init__(self):
-        self.upserts: list[dict] = []
-        self.deletes: list[dict] = []
-        self.query_response = {
-            "ids": [[]],
-            "documents": [[]],
-            "metadatas": [[]],
-            "distances": [[]],
-        }
-
-    def upsert(self, ids, documents, embeddings, metadatas):
-        self.upserts.append(
-            {"ids": ids, "documents": documents, "metadatas": metadatas}
-        )
-
-    def delete(self, where):
-        self.deletes.append(where)
-
-    def query(self, query_embeddings, n_results, where):
-        return self.query_response
-
-
-@pytest.fixture
-def fake_collection(monkeypatch):
-    coll = FakeCollection()
-
-    def _fake_get_chroma_client():
-        class _Client:
-            def get_or_create_collection(self, name):
-                return coll
-
-        return _Client()
-
-    monkeypatch.setattr(
-        "src.services.vector_index_service.get_chroma_client",
-        _fake_get_chroma_client,
-    )
-    return coll
 
 
 @pytest.fixture
@@ -101,11 +101,38 @@ def fake_llm():
 class StubVectorIndex(IVectorIndexService):
     def __init__(self, results=None) -> None:
         self._results = results or []
+        self.last_commit: dict | None = None
 
     def prepare(self, text):
         return ([text], [[0.0] * 4])
 
-    def commit(self, document_id, version_number, file_name, content_type, chunks, embeddings):
+    def prepare_paged(self, pages):
+        chunks: list[str] = []
+        pages_per_chunk: list[int] = []
+        for i, page in enumerate(pages, start=1):
+            if not page or not page.strip():
+                continue
+            chunks.append(page)
+            pages_per_chunk.append(i)
+        embeddings = [[0.0] * 4 for _ in chunks]
+        return chunks, embeddings, pages_per_chunk
+
+    def commit(
+        self,
+        document_id,
+        version_number,
+        file_name,
+        content_type,
+        chunks,
+        embeddings,
+        pages_per_chunk=None,
+    ):
+        self.last_commit = {
+            "document_id": document_id,
+            "version_number": version_number,
+            "chunks": list(chunks),
+            "pages_per_chunk": list(pages_per_chunk) if pages_per_chunk else None,
+        }
         return len(chunks)
 
     def demote_latest(self, document_id):
