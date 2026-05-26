@@ -16,7 +16,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from src.auth import limiter
 from src.controllers.auth_controller import router as auth_router
 from src.controllers.chat_controller import router as chat_router
 from src.controllers.document_controller import router as document_router
@@ -80,6 +84,10 @@ app = FastAPI(
     contact={"name": "SpotData"},
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 cors_origins = os.getenv("CORS_ORIGINS")
 if not cors_origins:

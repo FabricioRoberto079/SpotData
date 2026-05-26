@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 from fastapi import Depends, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from src.config import required_env, required_int
@@ -14,6 +16,8 @@ from src.exceptions import UnauthorizedError
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 class AuthError(UnauthorizedError):
