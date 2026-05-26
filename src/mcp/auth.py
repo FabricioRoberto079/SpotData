@@ -4,7 +4,6 @@ from src.config import required_env
 
 
 def resolve_user_id_from_token(token: str) -> str:
-    """Validate a Bearer JWT and return the `sub` claim. Raises RuntimeError on failure."""
     secret = required_env("JWT_SECRET")
     algorithm = required_env("JWT_ALGORITHM")
     try:

@@ -15,11 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_bearer(ctx: Context) -> str:
-    """Pull the Bearer token from the HTTP Authorization header of the active MCP request.
-
-    The MCP server can run over stdio or HTTP transports; for the HTTP transport
-    FastMCP exposes the underlying Starlette request through the request context.
-    """
     request = getattr(ctx.request_context, "request", None)
     if request is None:
         raise RuntimeError(
@@ -57,8 +52,8 @@ async def _ask(question: str, chat_id: str | None, user_id: str) -> dict:
             kind = event.get("type")
             if kind == "meta":
                 meta = event
-            elif kind == "citation":
-                citations.append(event["citation"])
+            elif kind == "citations":
+                citations = list(event.get("citations") or [])
             elif kind == "token":
                 answer_parts.append(event.get("content", ""))
             elif kind == "done":
