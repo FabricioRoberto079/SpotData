@@ -1,10 +1,6 @@
-import json
 import os
-import uuid
 
 import pytest
-from langchain_core.messages import AIMessageChunk
-from langchain_core.messages.tool import ToolCallChunk
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
@@ -17,38 +13,32 @@ from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.base_model import Base
 
 
-def make_stream_chunks(
+def make_structured_partials(
     answer: str = "",
     citations: list[dict] | None = None,
-) -> list[AIMessageChunk]:
-    """Build a list of `AIMessageChunk` emulating what `chat_stream_with_tools` yields.
+) -> list[dict]:
+    """Emulate the partial dict snapshots that `JsonOutputParser` yields from a
+    `RagAnswer` JSON stream. The schema lists `citations` before `answer`, so:
 
-    - The answer text is split into one chunk per word.
-    - Each citation becomes one chunk carrying a complete `Cite` tool_call_chunks
-      entry (args as a JSON string, single fragment so it parses immediately).
+    1. Citations array grows entry by entry (no `answer` key yet).
+    2. Once the array closes, the `answer` key appears and grows in 2-word chunks.
     """
-    chunks: list[AIMessageChunk] = []
-    for cit in citations or []:
-        chunks.append(
-            AIMessageChunk(
-                content="",
-                tool_call_chunks=[
-                    ToolCallChunk(
-                        name="Cite",
-                        args=json.dumps(cit),
-                        id=f"call_{uuid.uuid4().hex[:8]}",
-                        index=len(chunks),
-                    )
-                ],
-            )
-        )
+    cits = list(citations or [])
+    partials: list[dict] = []
+
+    for i in range(1, len(cits) + 1):
+        partials.append({"citations": cits[:i]})
+
     if answer:
-        for word in answer.split(" "):
-            chunks.append(AIMessageChunk(content=word + " "))
-        # Trim trailing space added by the last word.
-        last = chunks[-1]
-        chunks[-1] = AIMessageChunk(content=last.content.rstrip(" "))
-    return chunks
+        words = answer.split(" ")
+        current = ""
+        for w in words:
+            current = f"{current} {w}".strip() if current else w
+            partials.append({"citations": cits, "answer": current})
+    else:
+        partials.append({"citations": cits, "answer": ""})
+
+    return partials
 
 
 @pytest.fixture
@@ -83,42 +73,20 @@ def session(engine):
 class FakeLlm(LlmClient):
     def __init__(
         self,
-        stream_chunks: list | None = None,
+        structured_partials: list[dict] | None = None,
         stream_error: Exception | None = None,
-        structured_response=None,
-        structured_error: Exception | None = None,
     ) -> None:
-        self.stream_chunks = stream_chunks
+        self.structured_partials = structured_partials
         self.stream_error = stream_error
-        self.structured_response = structured_response
-        self.structured_error = structured_error
         self.embed_calls: list[list[str]] = []
 
-    async def chat_stream_with_tools(
-        self, messages, tools, model=None, temperature=0.0, max_tokens=None
+    async def chat_stream_structured(
+        self, messages, schema, model=None, temperature=0.0, max_tokens=None
     ):
         if self.stream_error is not None:
             raise self.stream_error
-        for chunk in self.stream_chunks or []:
-            if isinstance(chunk, Exception):
-                raise chunk
-            yield chunk
-
-    def chat_structured(
-        self,
-        messages,
-        response_model,
-        model=None,
-        temperature=0.0,
-        max_tokens=None,
-    ):
-        if self.structured_error is not None:
-            raise self.structured_error
-        if self.structured_response is None:
-            return response_model(
-                status="insufficient_information", answer="", citations=[]
-            )
-        return self.structured_response
+        for partial in self.structured_partials or []:
+            yield partial
 
     def embed(self, texts, model=None):
         self.embed_calls.append(list(texts))
