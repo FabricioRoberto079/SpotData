@@ -23,18 +23,13 @@ class RegisterEvidence(BaseModel):
     )
 
 
-Cite = RegisterEvidence
-
-
 class RagAnswer(BaseModel):
     """The structured RAG answer. Plan `citations` from the CONTEXT first,
     then write `answer` so every claim is backed by one of those entries.
 
-    NOTE: field order is load-bearing. OpenAI's strict JSON-schema decoding
-    emits fields in schema order, and `chat_service.ask_stream` exploits this
-    to deliver the `citations` event to the UI before the `answer` tokens
-    finish streaming. Do not reorder unless you also update that streaming
-    logic.
+    Field order is load-bearing: strict JSON-schema decoding emits fields in
+    schema order, and `chat_service.ask_stream` flushes the citations event
+    as soon as `answer` first appears in the partial.
     """
 
     citations: list[RegisterEvidence] = Field(
@@ -119,24 +114,6 @@ def _format_created_at(value) -> str:
     return str(value)
 
 
-FALLBACK_SYSTEM_PROMPT = """You are an assistant that answers questions using \
-STRICTLY the CONTEXT provided by the user.
-
-Output ONLY a natural-language answer in plain Markdown (Tiptap-compatible). \
-Do NOT call any tools. Use only information from the CONTEXT — do not invent.
-
-Rules:
-1. Answer in the same language as the question.
-2. Format using **bold**, *italic*, lists (- / 1.), headings (##), and tables \
-when helpful. Do not wrap the whole answer in code blocks.
-3. Wrap every substantive term from the QUESTION that appears in your answer \
-in `==…==` (Tiptap highlight syntax). Skip stopwords (qual, como, what, the, \
-a, o, é, de). Highlight the FIRST occurrence of each distinct term; further \
-mentions are optional. You can combine with **bold**: `==**term**==`.
-4. If the CONTEXT does not cover the question, output a single sentence \
-explaining that the answer is not available in the context."""
-
-
 def _build_user_content(question: str, contexts: list[dict]) -> str:
     today = datetime.now(timezone.utc).date().isoformat()
     if contexts:
@@ -158,12 +135,5 @@ def _build_user_content(question: str, contexts: list[dict]) -> str:
 def build_messages(question: str, contexts: list[dict]) -> list[dict]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": _build_user_content(question, contexts)},
-    ]
-
-
-def build_fallback_messages(question: str, contexts: list[dict]) -> list[dict]:
-    return [
-        {"role": "system", "content": FALLBACK_SYSTEM_PROMPT},
         {"role": "user", "content": _build_user_content(question, contexts)},
     ]

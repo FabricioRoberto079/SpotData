@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, AsyncIterator, Callable, Sequence
+from typing import Any, AsyncIterator, Callable
 
 from langchain.chat_models import init_chat_model
 from langchain.embeddings import init_embeddings
@@ -12,7 +12,6 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -127,63 +126,7 @@ def _wrap(call: Callable):
         raise _classify(e) from e
 
 
-def _bind_tools(llm: BaseChatModel, tools: Sequence[Any], spec: str):
-    if spec.startswith("openai:"):
-        try:
-            return llm.bind_tools(list(tools), strict=True)
-        except TypeError:
-            pass
-    return llm.bind_tools(list(tools))
-
-
 class LlmClient:
-    async def chat_stream_with_tools(
-        self,
-        messages: list[dict],
-        tools: Sequence[Any],
-        model: str | None = None,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> AsyncIterator[AIMessageChunk]:
-        """Stream chat output with tool calling.
-
-        Each yielded chunk has `content` (prose token) and/or `tool_call_chunks`
-        (partial deltas of a tool call). Callers accumulate chunks with `+` and read
-        `gathered.tool_calls` to get fully-assembled, schema-validated calls.
-        """
-        spec = _resolve_chat_spec(model, structured=True)
-        llm = _get_chat_model(spec, temperature, max_tokens)
-        llm_with_tools = _bind_tools(llm, tools, spec)
-        converted = _convert_messages(messages)
-
-        try:
-            async for chunk in llm_with_tools.astream(converted):
-                yield chunk
-        except LlmError:
-            raise
-        except Exception as e:
-            raise _classify(e) from e
-
-    async def chat_stream(
-        self,
-        messages: list[dict],
-        model: str | None = None,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> AsyncIterator[AIMessageChunk]:
-        """Stream plain-text chat output (no tool calling)."""
-        spec = _resolve_chat_spec(model, structured=False)
-        llm = _get_chat_model(spec, temperature, max_tokens)
-        converted = _convert_messages(messages)
-
-        try:
-            async for chunk in llm.astream(converted):
-                yield chunk
-        except LlmError:
-            raise
-        except Exception as e:
-            raise _classify(e) from e
-
     async def chat_stream_structured(
         self,
         messages: list[dict],
@@ -192,20 +135,12 @@ class LlmClient:
         temperature: float = 0.0,
         max_tokens: int | None = None,
     ) -> AsyncIterator[Any]:
-        """Stream a structured output, yielding partial dict snapshots.
-
-        Uses OpenAI's structured outputs (under the hood: a single tool call
-        with strict JSON schema validation). Each yielded item is a partial
-        dict (or the schema instance) reflecting the JSON parsed so far —
-        callers diff consecutive yields to extract token-level deltas.
-        """
         spec = _resolve_chat_spec(model, structured=True)
         llm = _get_chat_model(spec, temperature, max_tokens)
 
-        # Convert Pydantic class → dict on the OpenAI path so langchain wires
-        # the chain with JsonOutputParser (yields partial dicts during astream)
-        # instead of _oai_structured_outputs_parser (only emits the final
-        # parsed object, defeating token-by-token streaming).
+        # Pass schema as dict on the OpenAI path so langchain wires
+        # JsonOutputParser (partial dicts during astream) instead of the
+        # non-streaming Pydantic parser.
         schema_arg: Any = schema
         if spec.startswith("openai:") and isinstance(schema, type):
             fn = convert_to_openai_function(schema, strict=True)

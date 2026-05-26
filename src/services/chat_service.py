@@ -23,7 +23,7 @@ from src.models.evidence_citation import EvidenceCitation
 from src.models.knowledge_document import KnowledgeDocument
 from src.models.query import Query
 from src.models.response import Response as ResponseModel
-from src.prompts.rag_prompt import Cite, RagAnswer, build_messages
+from src.prompts.rag_prompt import RagAnswer, build_messages
 from src.services.qa_cache import get_qa_cache
 from src.services.vector_index_service import get_vector_index_service
 
@@ -33,8 +33,7 @@ CHAT_HISTORY_LIMIT = 10
 CHAT_TITLE_MAX_CHARS = 60
 RAG_TOP_K = 10
 
-MIN_CITATION_CONFIDENCE = 0.35
-STREAM_CHUNK_CHARS = 40
+MIN_CITATION_CONFIDENCE = 0.6
 
 
 class ChatService(IChatService):
@@ -279,12 +278,6 @@ class ChatService(IChatService):
         contexts: list[dict],
         response_id: str,
     ) -> dict | None:
-        """Resolve a citation from a CONTEXT entry index and persist it.
-
-        The model only emits `context_index` + `confidence` — everything else
-        (document_id, version, page, excerpt) comes from the indexed context
-        we already retrieved via vector search.
-        """
         if context_index < 0 or context_index >= len(contexts):
             return None
         ctx = contexts[context_index]
@@ -439,24 +432,15 @@ class ChatService(IChatService):
                     payload = self._serialize_citation(citation_row, version=version)
                     citations_payload.append(payload)
 
+            yield {"type": "citations", "citations": citations_payload}
+
             text = cached["answer"] or ""
-            for i in range(0, len(text), STREAM_CHUNK_CHARS):
-                yield {
-                    "type": "token",
-                    "content": text[i : i + STREAM_CHUNK_CHARS],
-                }
+            if text:
+                yield {"type": "token", "content": text}
 
             elapsed = int((time.perf_counter() - started) * 1000)
             response_row.time_ms = elapsed
             self._session.commit()
-            logger.info(
-                "stream %s cached=true status=%s citations=%d elapsed=%dms",
-                query_row.id,
-                response_row.status,
-                len(citations_payload),
-                elapsed,
-            )
-            yield {"type": "citations", "citations": citations_payload}
             yield {
                 "type": "done",
                 "status": response_row.status,
@@ -468,10 +452,8 @@ class ChatService(IChatService):
 
     async def _finalize_insufficient(
         self,
-        query_row: Query,
         response_row: ResponseModel,
         started: float,
-        reason: str,
         skip_citations_event: bool = False,
     ) -> AsyncIterator[dict]:
         elapsed = int((time.perf_counter() - started) * 1000)
@@ -479,13 +461,6 @@ class ChatService(IChatService):
         response_row.status = ResponseStatus.INSUFFICIENT_INFORMATION.value
         response_row.time_ms = elapsed
         self._session.commit()
-        logger.info(
-            "stream %s status=%s elapsed=%dms gate=%s",
-            query_row.id,
-            response_row.status,
-            elapsed,
-            reason,
-        )
         if not skip_citations_event:
             yield {"type": "citations", "citations": []}
         yield {
@@ -499,17 +474,8 @@ class ChatService(IChatService):
         raw_citations: list,
         contexts: list[dict],
         response_id: str,
-    ) -> tuple[list[dict], int, float]:
-        """Validate, persist and serialize the citations from a partial.
-
-        Returns (payload, low_confidence_skipped, best_confidence_seen).
-        Safe to call once the model has emitted the closing `]` of the
-        citations array (signaled by `"answer"` appearing in the partial when
-        the schema lists `citations` before `answer`).
-        """
+    ) -> list[dict]:
         citations_payload: list[dict] = []
-        low_confidence_skipped = 0
-        best_confidence_seen = 0.0
         seen_indices: set[int] = set()
         for c in raw_citations:
             if not isinstance(c, dict):
@@ -518,11 +484,7 @@ class ChatService(IChatService):
             if not isinstance(context_index, int):
                 continue
             confidence = self._clamp_confidence(c.get("confidence"))
-            if confidence is None:
-                continue
-            best_confidence_seen = max(best_confidence_seen, confidence)
-            if confidence < MIN_CITATION_CONFIDENCE:
-                low_confidence_skipped += 1
+            if confidence is None or confidence < MIN_CITATION_CONFIDENCE:
                 continue
             if context_index in seen_indices:
                 continue
@@ -533,19 +495,7 @@ class ChatService(IChatService):
                 continue
             seen_indices.add(context_index)
             citations_payload.append(payload)
-        return citations_payload, low_confidence_skipped, best_confidence_seen
-
-    @staticmethod
-    def _extract_text_chunk(content) -> str:
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return "".join(
-                p.get("text", "")
-                for p in content
-                if isinstance(p, dict)
-            )
-        return ""
+        return citations_payload
 
     async def ask_stream(
         self,
@@ -605,9 +555,7 @@ class ChatService(IChatService):
             }
 
             if not contexts:
-                async for event in self._finalize_insufficient(
-                    query_row, response_row, started, "no_contexts"
-                ):
+                async for event in self._finalize_insufficient(response_row, started):
                     yield event
                 return
 
@@ -616,20 +564,12 @@ class ChatService(IChatService):
             if history:
                 rag_messages = [rag_messages[0], *history, rag_messages[1]]
 
-            # Single LLM call via structured outputs (one tool call under the
-            # hood). The schema lists `citations` before `answer`, so the
-            # model emits the citations array FIRST in the JSON stream — we
-            # flush them as soon as the `answer` key appears in the partial
-            # (proof that the citations array is closed) and then keep
-            # streaming `answer` tokens. UI gets sources up front.
             answer_parts: list[str] = []
             prev_answer = ""
             last_partial: dict | None = None
             citations_processed = False
             citations_emitted = False
             citations_payload: list[dict] = []
-            low_confidence_skipped = 0
-            best_confidence_seen = 0.0
 
             def _to_partial_dict(obj: Any) -> dict:
                 if isinstance(obj, dict):
@@ -647,20 +587,14 @@ class ChatService(IChatService):
 
                     if not citations_processed and "answer" in snapshot:
                         raw_citations = snapshot.get("citations") or []
-                        (
-                            citations_payload,
-                            low_confidence_skipped,
-                            best_confidence_seen,
-                        ) = self._build_and_persist_citations(
+                        citations_payload = self._build_and_persist_citations(
                             raw_citations, contexts, response_row.id
                         )
                         citations_processed = True
-                        if citations_payload:
-                            yield {
-                                "type": "citations",
-                                "citations": citations_payload,
-                            }
-                            citations_emitted = True
+                        if not citations_payload:
+                            break
+                        yield {"type": "citations", "citations": citations_payload}
+                        citations_emitted = True
 
                     current_answer = snapshot.get("answer")
                     if not isinstance(current_answer, str):
@@ -689,38 +623,17 @@ class ChatService(IChatService):
 
             last_answer = "".join(answer_parts)
 
-            # Fallback for the unlikely case where the model never emitted the
-            # `answer` key (e.g., truncated stream): process whatever citations
-            # the last partial carries so the post-loop bookkeeping is consistent.
             if not citations_processed:
                 raw_citations = (last_partial or {}).get("citations") or []
-                (
-                    citations_payload,
-                    low_confidence_skipped,
-                    best_confidence_seen,
-                ) = self._build_and_persist_citations(
+                citations_payload = self._build_and_persist_citations(
                     raw_citations, contexts, response_row.id
                 )
                 citations_processed = True
 
-            logger.info(
-                "stream %s post-llm: answer_len=%d "
-                "citations_emitted=%d low_conf_skipped=%d best_conf=%.2f "
-                "early_emit=%s",
-                query_row.id,
-                len(last_answer),
-                len(citations_payload),
-                low_confidence_skipped,
-                best_confidence_seen,
-                citations_emitted,
-            )
-
             if not last_answer and not citations_payload:
                 async for event in self._finalize_insufficient(
-                    query_row,
                     response_row,
                     started,
-                    "empty_response",
                     skip_citations_event=citations_emitted,
                 ):
                     yield event
@@ -732,15 +645,6 @@ class ChatService(IChatService):
             response_row.time_ms = elapsed
             self._session.commit()
 
-            logger.info(
-                "stream %s status=%s elapsed=%dms chars=%d citations=%d skipped_low=%d",
-                query_row.id,
-                response_row.status,
-                elapsed,
-                len(last_answer),
-                len(citations_payload),
-                low_confidence_skipped,
-            )
             if not citations_emitted:
                 yield {"type": "citations", "citations": citations_payload}
             yield {
