@@ -1,53 +1,23 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
+from src.config import required_env, required_int
 from src.data.postgres_client import SessionLocal
+from src.exceptions import UnauthorizedError
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
 
-class AuthError(HTTPException):
-    def __init__(self, detail: str):
-        super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
 
-
-def _required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required env var: {name}")
-    return value
-
-
-def _algorithm() -> str:
-    return _required_env("JWT_ALGORITHM")
-
-
-def _expiration_minutes() -> int:
-    raw = _required_env("JWT_EXPIRATION_MINUTES")
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"JWT_EXPIRATION_MINUTES must be an integer, got: {raw!r}"
-        ) from exc
-
-
-def _secret_required() -> str:
-    secret = os.getenv("JWT_SECRET")
-    if not secret:
-        raise HTTPException(
-            status_code=503,
-            detail="JWT_SECRET not configured — auth endpoint unavailable.",
-        )
-    return secret
+class AuthError(UnauthorizedError):
+    """Raised on any auth/JWT failure. Handled by the global DomainError handler."""
 
 
 def hash_password(plain: str) -> str:
@@ -64,8 +34,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def issue_token(user: User) -> tuple[str, int]:
-    secret = _secret_required()
-    minutes = _expiration_minutes()
+    secret = required_env("JWT_SECRET")
+    minutes = required_int("JWT_EXPIRATION_MINUTES")
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=minutes)
     payload = {
@@ -75,28 +45,23 @@ def issue_token(user: User) -> tuple[str, int]:
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
     }
-    token = jwt.encode(payload, secret, algorithm=_algorithm())
+    token = jwt.encode(payload, secret, algorithm=required_env("JWT_ALGORITHM"))
     return token, minutes * 60
 
 
 def _decode_token(token: str) -> dict:
-    secret = _secret_required()
+    secret = required_env("JWT_SECRET")
+    algorithm = required_env("JWT_ALGORITHM")
     try:
-        return jwt.decode(token, secret, algorithms=[_algorithm()])
+        return jwt.decode(token, secret, algorithms=[algorithm])
     except jwt.ExpiredSignatureError:
         raise AuthError("Token expired.")
     except jwt.InvalidTokenError as e:
         raise AuthError(f"Invalid token: {e}")
 
 
-def _get_db() -> Session:
-    return SessionLocal()
-
-
-def get_current_user(request: Request) -> User | None:
-    if not os.getenv("JWT_SECRET"):
-        return None
-
+def authenticate_request(request: Request) -> User:
+    """Validate the Bearer JWT and return the authenticated User. Raises AuthError otherwise."""
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
         raise AuthError("Authorization header missing or malformed.")
@@ -109,7 +74,7 @@ def get_current_user(request: Request) -> User | None:
     if not user_id:
         raise AuthError("Token has no subject.")
 
-    session = _get_db()
+    session: Session = SessionLocal()
     try:
         user = session.get(User, user_id)
         if user is None:
@@ -120,7 +85,5 @@ def get_current_user(request: Request) -> User | None:
         session.close()
 
 
-def require_user(current_user: User | None = Depends(get_current_user)) -> User:
-    if current_user is None:
-        raise AuthError("This operation requires authentication.")
+def require_user(current_user: User = Depends(authenticate_request)) -> User:
     return current_user

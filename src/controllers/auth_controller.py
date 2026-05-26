@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from src.integrations.auth import require_user
+from src.auth import require_user
 from src.interfaces.auth_service import IAuthService
 from src.models.user import User
 from src.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
@@ -23,7 +23,6 @@ async def register(
         name=payload.name,
         email=payload.email,
         password=payload.password,
-        role=payload.role,
     )
 
 
