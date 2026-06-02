@@ -81,6 +81,7 @@ class VectorIndexService(IVectorIndexService):
         chunks: list[str],
         embeddings: list[list[float]],
         pages_per_chunk: list[int | None] | None = None,
+        category_id: str | None = None,
     ) -> int:
         self._session.execute(
             delete(VectorChunk).where(
@@ -102,6 +103,7 @@ class VectorIndexService(IVectorIndexService):
                     is_latest=True,
                     file_name=file_name,
                     content_type=content_type,
+                    category_id=category_id,
                     page=page,
                     snippet=chunk_text,
                     embedding=embeddings[i],
@@ -133,9 +135,14 @@ class VectorIndexService(IVectorIndexService):
         query: str,
         n_results: int = 5,
         embedding: list[float] | None = None,
+        allowed_category_ids: list[str] | None = None,
     ) -> list[dict]:
         query = (query or "").strip()
         if not query:
+            return []
+
+        # Restricted users (non-admin) with no granted categories can match nothing.
+        if allowed_category_ids is not None and not allowed_category_ids:
             return []
 
         if embedding is None:
@@ -143,24 +150,47 @@ class VectorIndexService(IVectorIndexService):
 
         dialect = self._session.bind.dialect.name if self._session.bind else ""
         if dialect == "postgresql":
-            return self._search_hybrid(query, n_results, embedding)
-        return self._search_semantic(n_results, embedding)
+            return self._search_hybrid(
+                query, n_results, embedding, allowed_category_ids
+            )
+        return self._search_semantic(n_results, embedding, allowed_category_ids)
 
-    def _search_semantic(self, n_results: int, embedding: list[float]) -> list[dict]:
+    @staticmethod
+    def _scope(stmt, allowed_category_ids: list[str] | None):
+        """Append the category-access filter. ``None`` means unrestricted (admin)."""
+        if allowed_category_ids is None:
+            return stmt
+        return stmt.where(VectorChunk.category_id.in_(allowed_category_ids))
+
+    def _search_semantic(
+        self,
+        n_results: int,
+        embedding: list[float],
+        allowed_category_ids: list[str] | None = None,
+    ) -> list[dict]:
         distance = VectorChunk.embedding.cosine_distance(embedding)
+        stmt = self._scope(self._search_select(distance), allowed_category_ids)
         rows = self._session.execute(
-            self._search_select(distance).order_by(distance.asc()).limit(n_results)
+            stmt.order_by(distance.asc()).limit(n_results)
         ).all()
         return [self._row_to_dict(chunk, float(dist), doc_name, created_at)
                 for chunk, dist, doc_name, created_at in rows]
 
     def _search_hybrid(
-        self, query: str, n_results: int, embedding: list[float]
+        self,
+        query: str,
+        n_results: int,
+        embedding: list[float],
+        allowed_category_ids: list[str] | None = None,
     ) -> list[dict]:
         distance = VectorChunk.embedding.cosine_distance(embedding)
         semantic_rows = self._session.execute(
-            select(VectorChunk.id, distance.label("distance"))
-            .where(VectorChunk.is_latest.is_(True))
+            self._scope(
+                select(VectorChunk.id, distance.label("distance")).where(
+                    VectorChunk.is_latest.is_(True)
+                ),
+                allowed_category_ids,
+            )
             .order_by(distance.asc())
             .limit(HYBRID_CANDIDATE_K)
         ).all()
@@ -172,9 +202,12 @@ class VectorIndexService(IVectorIndexService):
             tsquery = func.to_tsquery(TS_LANGUAGE, tsquery_expr)
             rank = func.ts_rank_cd(tsv, tsquery)
             bm25_rows = self._session.execute(
-                select(VectorChunk.id, rank.label("rank"))
-                .where(VectorChunk.is_latest.is_(True))
-                .where(tsv.op("@@")(tsquery))
+                self._scope(
+                    select(VectorChunk.id, rank.label("rank"))
+                    .where(VectorChunk.is_latest.is_(True))
+                    .where(tsv.op("@@")(tsquery)),
+                    allowed_category_ids,
+                )
                 .order_by(rank.desc())
                 .limit(HYBRID_CANDIDATE_K)
             ).all()

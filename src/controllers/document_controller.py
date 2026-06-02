@@ -5,14 +5,15 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response
 
 from src.enums.content_type import ContentType
-from src.enums.document_category import DocumentCategory
 from src.enums.upload_kind import UploadKind
+from src.enums.user_role import UserRole
 from src.exceptions import ValidationError
-from src.auth import require_user
+from src.auth import require_role
 from src.interfaces.document_service import IDocumentService
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.user import User
 from src.schemas.document import DocumentList, DocumentOut, SearchResults
+from src.services.access import get_allowed_category_ids
 from src.services.document_service import get_document_service
 from src.services.upload_strategies import get_upload_strategy
 from src.services.vector_index_service import get_vector_index_service
@@ -56,17 +57,20 @@ def _file_response(
 
 @router.get("", response_model=DocumentList, summary="List documents (paginated)")
 async def list_all_documents(
-    category: DocumentCategory | None = Query(
+    category_id: str | None = Query(
         default=None,
-        description="Optional. Filter by category (documents/images/text). Omit to list all.",
+        description="Optional. Filter by category id. Omit to list everything you can access.",
     ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     return document_service.list_documents(
-        category, limit=limit, offset=offset, uploaded_by=current_user.id
+        category_id,
+        limit=limit,
+        offset=offset,
+        allowed_category_ids=allowed_category_ids,
     )
 
 
@@ -78,15 +82,20 @@ async def list_all_documents(
         "- `file` → send `file` (PDF, DOC, DOCX, TXT, MD).\n"
         "- `image` → send `file` (PNG, JPG, JPEG).\n"
         "- `text` → send `text` (plain text body).\n\n"
-        "Optional `file_name` overrides the stored name."
+        "Requires a `category_id` you have access to. "
+        "Optional `file_name` overrides the stored name. Viewers cannot upload."
     ),
 )
 async def upload_document(
     kind: UploadKind = Form(..., description="Strategy: 'file', 'image' or 'text'."),
+    category_id: str = Form(
+        ..., description="Target category id. Must be one you are linked to."
+    ),
     file: UploadFile | None = File(default=None),
     text: str | None = Form(default=None),
     file_name: str | None = Form(default=None),
-    current_user: User = Depends(require_user),
+    current_user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     try:
@@ -104,6 +113,8 @@ async def upload_document(
         payload.file_name,
         payload.category,
         current_user.id,
+        category_id,
+        allowed_category_ids,
     )
     return {"message": _upload_message(result), **result}
 
@@ -116,43 +127,51 @@ async def upload_document(
 async def search_documents(
     q: str,
     n_results: int = Query(default=5, ge=1, le=20),
-    current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     vector_index: IVectorIndexService = Depends(get_vector_index_service),
 ):
     if not q.strip():
         raise ValidationError("Empty query.")
-    results = await asyncio.to_thread(vector_index.search, q, n_results)
+    results = await asyncio.to_thread(
+        vector_index.search, q, n_results, None, allowed_category_ids
+    )
     return {"query": q, "results": results}
 
 
 @router.get("/{document_id}", response_model=DocumentOut)
 async def get_document_metadata(
     document_id: str,
-    current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
-    return document_service.get_document(document_id, uploaded_by=current_user.id)
+    return document_service.get_document(
+        document_id, allowed_category_ids=allowed_category_ids
+    )
 
 
 @router.delete("/{document_id}")
 async def delete_document_endpoint(
     document_id: str,
-    current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
-    document_service.delete_document(document_id, uploaded_by=current_user.id)
+    document_service.delete_document(
+        document_id, allowed_category_ids=allowed_category_ids
+    )
     return {"message": "Document removed."}
 
 
 @router.get("/{document_id}/download")
 async def download_latest(
     document_id: str,
-    current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     return _file_response(
         *document_service.get_version_file(
-            document_id, version_number=None, uploaded_by=current_user.id
+            document_id,
+            version_number=None,
+            allowed_category_ids=allowed_category_ids,
         )
     )
 
@@ -161,11 +180,13 @@ async def download_latest(
 async def download_version(
     document_id: str,
     version_number: int,
-    current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     return _file_response(
         *document_service.get_version_file(
-            document_id, version_number=version_number, uploaded_by=current_user.id
+            document_id,
+            version_number=version_number,
+            allowed_category_ids=allowed_category_ids,
         )
     )

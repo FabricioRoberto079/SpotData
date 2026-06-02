@@ -502,6 +502,7 @@ class ChatService(IChatService):
         question: str,
         chat_id: str | None = None,
         user_id: str | None = None,
+        allowed_category_ids: list[str] | None = None,
     ) -> AsyncIterator[dict]:
         question = question.strip()
         if not question:
@@ -509,14 +510,20 @@ class ChatService(IChatService):
 
         started = time.perf_counter()
 
-        cached = self._cache.lookup_exact(question)
+        # The Q&A cache is global; a cached answer may draw on categories the asker
+        # cannot see. Only admins (unrestricted) read/write it — restricted users
+        # always recompute against their own category scope.
+        use_cache = allowed_category_ids is None
+
         question_embedding: list[float] | None = None
+        cached = self._cache.lookup_exact(question) if use_cache else None
         if cached is None:
             embeds = await asyncio.to_thread(self._llm.embed, [question])
             question_embedding = embeds[0]
-            cached = await asyncio.to_thread(
-                self._cache.lookup_semantic, question, question_embedding
-            )
+            if use_cache:
+                cached = await asyncio.to_thread(
+                    self._cache.lookup_semantic, question, question_embedding
+                )
         if cached is not None and self._is_valid_cached_payload(cached):
             async for event in self._serve_cached_stream(
                 question, cached, user_id, chat_id, started
@@ -529,6 +536,7 @@ class ChatService(IChatService):
             question,
             RAG_TOP_K,
             question_embedding,
+            allowed_category_ids,
         )
 
         try:
@@ -653,7 +661,7 @@ class ChatService(IChatService):
                 "time_ms": elapsed,
             }
 
-            if question_embedding is not None:
+            if use_cache and question_embedding is not None:
                 self._cache.put(
                     question,
                     question_embedding,

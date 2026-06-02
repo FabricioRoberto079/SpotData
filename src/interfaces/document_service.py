@@ -11,6 +11,7 @@ class IDocumentService(ABC):
         file_name: str,
         category: DocumentCategory,
         uploaded_by: str | None = None,
+        category_id: str | None = None,
     ) -> str: ...
 
     @abstractmethod
@@ -29,6 +30,8 @@ class IDocumentService(ABC):
         file_name: str,
         category: DocumentCategory,
         uploaded_by: str | None = None,
+        category_id: str | None = None,
+        allowed_category_ids: list[str] | None = None,
     ) -> dict: ...
 
     @abstractmethod
@@ -36,24 +39,24 @@ class IDocumentService(ABC):
         self,
         document_id: str,
         version_number: int | None = None,
-        uploaded_by: str | None = None,
+        allowed_category_ids: list[str] | None = None,
     ) -> tuple[bytes, str, str, int]: ...
 
     @abstractmethod
     def list_documents(
         self,
-        category: DocumentCategory | None = None,
+        category_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
-        uploaded_by: str | None = None,
+        allowed_category_ids: list[str] | None = None,
     ) -> dict: ...
 
     @abstractmethod
     def get_document(
-        self, document_id: str, uploaded_by: str | None = None
+        self, document_id: str, allowed_category_ids: list[str] | None = None
     ) -> dict: ...
 
     @abstractmethod
     def delete_document(
-        self, document_id: str, uploaded_by: str | None = None
+        self, document_id: str, allowed_category_ids: list[str] | None = None
     ) -> None: ...

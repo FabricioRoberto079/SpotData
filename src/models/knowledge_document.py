@@ -11,6 +11,9 @@ class KnowledgeDocument(BaseModel):
 
     file_name: Mapped[str] = mapped_column(String, nullable=False)
     category: Mapped[str] = mapped_column(String, nullable=False)
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True
+    )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

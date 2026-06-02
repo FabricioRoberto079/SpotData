@@ -11,6 +11,7 @@ from src.interfaces.chat_service import IChatService
 from src.models.user import User
 from src.schemas.chat import ChatDetailOut, ChatOut, ChatUpdate, MessageCreate
 from src.schemas.system import MessageResponse
+from src.services.access import get_allowed_category_ids
 from src.services.chat_service import get_chat_service
 
 logger = logging.getLogger(__name__)
@@ -50,12 +51,14 @@ def _encode_event(event: dict) -> bytes:
 async def send_message(
     payload: MessageCreate,
     current_user: User = Depends(require_user),
+    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     chat_service: IChatService = Depends(get_chat_service),
 ):
     event_gen = chat_service.ask_stream(
         question=payload.question,
         chat_id=payload.chat_id,
         user_id=current_user.id,
+        allowed_category_ids=allowed_category_ids,
     )
 
     # Force first event so early errors surface as proper HTTP responses

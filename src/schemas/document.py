@@ -5,6 +5,7 @@ class DocumentOut(BaseModel):
     id: str
     file_name: str
     category: str
+    category_id: str | None = None
     uploaded_by: str | None = None
     uploaded_at: str | None = None
     versions_count: int

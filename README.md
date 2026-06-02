@@ -102,12 +102,27 @@ Auth obrigatória (JWT) em tudo, exceto `POST /auth/register`, `POST /auth/login
 | Grupo | Rotas |
 |---|---|
 | Auth | `POST /auth/register` • `POST /auth/login` • `GET /auth/me` |
-| Documentos | `GET /documents` (filtrar por `?category=documents\|images\|text`) • `POST /documents/upload` (campo `kind` = `file\|image\|text`; re-upload do mesmo `file_name` → nova versão automática) • `GET /documents/search` • `GET DELETE /documents/{id}` • `GET /documents/{id}/download` • `GET /documents/{id}/versions/{n}/download` |
+| Admin (só `admin`) | `GET POST /admin/categories` • `PATCH DELETE /admin/categories/{id}` • `GET /admin/users` • `PATCH /admin/users/{id}/role` • `PATCH /admin/users/{id}/active` • `GET POST /admin/users/{id}/categories` • `DELETE /admin/users/{id}/categories/{cat_id}` |
+| Documentos | `GET /documents` (filtrar por `?category_id=`) • `POST /documents/upload` (campos `kind` = `file\|image\|text` e `category_id` obrigatório; re-upload do mesmo `file_name` → nova versão automática) • `GET /documents/search` • `GET DELETE /documents/{id}` • `GET /documents/{id}/download` • `GET /documents/{id}/versions/{n}/download` |
 | Pastas de chat | `GET POST /chat-folders` • `PUT DELETE /chat-folders/{id}` |
 | Chats | `GET /chats` • `GET PATCH DELETE /chats/{chat_id}` |
 | Mensagens | `POST /chats/messages` |
 
 > Não existe `POST /chats` — chat é criado pela primeira mensagem. `PATCH /chats/{id}` permite renomear ou mover de pasta depois.
+
+### Papéis e acesso por categoria
+
+Três papéis (`users.role`): **`admin`** (cria categorias, gerencia usuários e vincula usuários ↔ categorias), **`editor`** (sobe e consulta documentos) e **`viewer`** (só consulta). Quem se registra por `POST /auth/register` nasce `viewer` já vinculado à categoria default **`GERAL`** — o admin concede acesso a outras categorias depois.
+
+Categorias são normalizadas na criação: acentos e caracteres especiais removidos, espaços internos viram `_`, pontas aparadas, salvas em UPPERCASE (ex.: `"  Recursos   Humanos! "` → `RECURSOS_HUMANOS`). O `slug` é a versão minúscula, usado como chave única.
+
+Documentos pertencem a uma categoria. Listagem, busca (`/documents/search`) e RAG do chat só enxergam as categorias vinculadas ao usuário; o admin vê tudo. O upload exige um `category_id` ao qual o usuário tenha acesso e papel `editor`/`admin`.
+
+> **Bootstrap do admin:** a migração não tem como saber quem é admin. Depois de migrar, promova um usuário manualmente:
+> ```sql
+> UPDATE users SET role = 'admin' WHERE email = 'voce@exemplo.com';
+> ```
+> Sem isso ninguém consegue criar categorias.
 
 ### Resposta de `POST /chats/messages` (NDJSON stream)
 

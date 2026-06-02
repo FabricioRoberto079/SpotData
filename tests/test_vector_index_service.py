@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from src.enums.document_category import DocumentCategory
 from src.exceptions import ValidationError
+from src.models.category import Category
 from src.models.knowledge_document import KnowledgeDocument
 from src.models.vector_chunk import VectorChunk
 from src.services.text_chunker import TextChunker
@@ -117,3 +118,30 @@ def test_search_empty_query_returns_empty(session, fake_llm):
     svc = VectorIndexService(session, TextChunker(), fake_llm)
     assert svc.search("") == []
     assert svc.search("   ") == []
+
+
+def test_search_returns_empty_for_restricted_user_without_grants(session, fake_llm):
+    # A non-admin with an empty allowed list can match nothing — guards against
+    # an unscoped query leaking every category's chunks.
+    svc = VectorIndexService(session, TextChunker(), fake_llm)
+    assert svc.search("anything", allowed_category_ids=[]) == []
+
+
+def test_commit_persists_category_id(session, fake_llm):
+    _seed_document(session)
+    session.add(Category(id="cat-9", name="Nove", slug="nove"))
+    session.commit()
+    svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
+    chunks, embeddings = svc.prepare("Frase um. Frase dois.")
+    svc.commit(
+        document_id="doc-1",
+        version_number=1,
+        file_name="x.txt",
+        content_type="texto",
+        chunks=chunks,
+        embeddings=embeddings,
+        category_id="cat-9",
+    )
+    rows = session.execute(select(VectorChunk)).scalars().all()
+    assert rows
+    assert all(r.category_id == "cat-9" for r in rows)

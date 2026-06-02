@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -12,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from src.config import required_env, required_int
 from src.data.postgres_client import SessionLocal
-from src.exceptions import UnauthorizedError
+from src.enums.user_role import UserRole
+from src.exceptions import ForbiddenError, UnauthorizedError
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,11 @@ def verify_password(plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except ValueError:
         return False
+
+
+def generate_reset_code() -> str:
+    """Cryptographically random 6-digit code for password resets."""
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def issue_token(user: User) -> tuple[str, int]:
@@ -83,6 +90,8 @@ def authenticate_request(request: Request) -> User:
         user = session.get(User, user_id)
         if user is None:
             raise AuthError("Token user no longer exists.")
+        if not user.is_active:
+            raise AuthError("Account is disabled.")
         session.expunge(user)
         return user
     finally:
@@ -91,3 +100,19 @@ def authenticate_request(request: Request) -> User:
 
 def require_user(current_user: User = Depends(authenticate_request)) -> User:
     return current_user
+
+
+def require_role(*roles: UserRole):
+    """Dependency factory: allow only the listed roles. Reuses authenticate_request,
+    so it inherits the same JWT validation and disabled-account check."""
+    allowed = {r.value for r in roles}
+
+    def _dependency(current_user: User = Depends(authenticate_request)) -> User:
+        if current_user.role not in allowed:
+            raise ForbiddenError("Insufficient permissions for this operation.")
+        return current_user
+
+    return _dependency
+
+
+require_admin = require_role(UserRole.ADMIN)
