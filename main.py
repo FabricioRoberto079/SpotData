@@ -70,6 +70,7 @@ Chat model and embedding model are configured via `LLM_CHAT_MODEL` /
 JWT is required on every endpoint except:
 
 - `POST /auth/register` and `POST /auth/login`
+- `POST /auth/forgot-password` and `POST /auth/reset-password`
 - `GET /health`
 - `GET /docs`, `GET /redoc`, `GET /openapi.json`
 
@@ -142,6 +143,8 @@ async def health():
 _PUBLIC_OPERATIONS = {
     ("post", "/auth/register"),
     ("post", "/auth/login"),
+    ("post", "/auth/forgot-password"),
+    ("post", "/auth/reset-password"),
     ("get", "/health"),
 }
 

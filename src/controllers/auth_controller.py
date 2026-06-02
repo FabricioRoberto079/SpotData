@@ -3,7 +3,15 @@ from fastapi import APIRouter, Depends, Request
 from src.auth import limiter, require_user
 from src.interfaces.auth_service import IAuthService
 from src.models.user import User
-from src.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
+from src.schemas.auth import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    MessageResponse,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserOut,
+)
 from src.services.auth_service import get_auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -38,6 +46,41 @@ async def login(
     auth_service: IAuthService = Depends(get_auth_service),
 ):
     return auth_service.login(email=payload.email, password=payload.password)
+
+
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    summary="Request a password-reset code by email",
+)
+@limiter.limit("5/minute")
+async def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    auth_service: IAuthService = Depends(get_auth_service),
+):
+    auth_service.request_password_reset(email=payload.email)
+    # Same response whether or not the email exists, to avoid account enumeration.
+    return {"detail": "If the email is registered, a reset code has been sent."}
+
+
+@router.post(
+    "/reset-password",
+    response_model=MessageResponse,
+    summary="Reset the password using the emailed code",
+)
+@limiter.limit("5/minute")
+async def reset_password(
+    request: Request,
+    payload: ResetPasswordRequest,
+    auth_service: IAuthService = Depends(get_auth_service),
+):
+    auth_service.reset_password(
+        email=payload.email,
+        code=payload.code,
+        new_password=payload.new_password,
+    )
+    return {"detail": "Password updated. You can now log in with the new password."}
 
 
 @router.get(

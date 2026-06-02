@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -35,6 +36,11 @@ def verify_password(plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except ValueError:
         return False
+
+
+def generate_reset_code() -> str:
+    """Cryptographically random 6-digit code for password resets."""
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def issue_token(user: User) -> tuple[str, int]:
