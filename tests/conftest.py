@@ -126,12 +126,14 @@ class StubVectorIndex(IVectorIndexService):
         chunks,
         embeddings,
         pages_per_chunk=None,
+        category_id=None,
     ):
         self.last_commit = {
             "document_id": document_id,
             "version_number": version_number,
             "chunks": list(chunks),
             "pages_per_chunk": list(pages_per_chunk) if pages_per_chunk else None,
+            "category_id": category_id,
         }
         return len(chunks)
 
@@ -141,7 +143,8 @@ class StubVectorIndex(IVectorIndexService):
     def purge_document(self, document_id):
         pass
 
-    def search(self, query, n_results=5, embedding=None):
+    def search(self, query, n_results=5, embedding=None, allowed_category_ids=None):
+        self.last_search_scope = allowed_category_ids
         return self._results
 
 

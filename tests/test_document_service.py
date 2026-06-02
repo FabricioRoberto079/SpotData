@@ -2,9 +2,10 @@ import pytest
 
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
-from src.exceptions import NotFoundError, ValidationError
+from src.exceptions import ForbiddenError, NotFoundError, ValidationError
 from src.interfaces.text_extractor import ITextExtractor
 from src.interfaces.vector_index_service import IVectorIndexService
+from src.models.category import Category
 from src.models.user import User
 from src.services.document_service import DocumentService
 from tests.conftest import StubQaCache
@@ -16,6 +17,12 @@ def _seed_user(session, user_id: str) -> str:
     )
     session.commit()
     return user_id
+
+
+def _seed_category(session, category_id: str = "cat-1") -> str:
+    session.add(Category(id=category_id, name=category_id, slug=category_id))
+    session.commit()
+    return category_id
 
 
 class _StubExtractor(ITextExtractor):
@@ -55,11 +62,13 @@ class _StubIndex(IVectorIndexService):
         chunks,
         embeddings,
         pages_per_chunk=None,
+        category_id=None,
     ):
         self.indexed.append((document_id, version_number, chunks[0]))
         self.last_pages_per_chunk = (
             list(pages_per_chunk) if pages_per_chunk is not None else None
         )
+        self.last_category_id = category_id
         return len(chunks)
 
     def demote_latest(self, document_id):
@@ -68,7 +77,7 @@ class _StubIndex(IVectorIndexService):
     def purge_document(self, document_id):
         self.purged.append(document_id)
 
-    def search(self, query, n_results=5, embedding=None):
+    def search(self, query, n_results=5, embedding=None, allowed_category_ids=None):
         return []
 
 
@@ -140,12 +149,13 @@ def test_delete_purges_vectors_and_removes_doc(session):
 
 def test_upload_same_filename_reuses_document_as_new_version(session):
     user = _seed_user(session, "user-1")
+    cat = _seed_category(session)
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     first = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user
+        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user, cat
     )
     second = svc.upload_new_document(
-        b"v2", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user
+        b"v2", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user, cat
     )
     assert first["created"] is True
     assert second["created"] is False
@@ -156,16 +166,37 @@ def test_upload_same_filename_reuses_document_as_new_version(session):
 def test_upload_same_filename_different_users_creates_separate_docs(session):
     u1 = _seed_user(session, "user-1")
     u2 = _seed_user(session, "user-2")
+    cat = _seed_category(session)
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     a = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u1
+        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u1, cat
     )
     b = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u2
+        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u2, cat
     )
     assert a["document_id"] != b["document_id"]
     assert a["created"] is True
     assert b["created"] is True
+
+
+def test_upload_unknown_category_raises_validation(session):
+    user = _seed_user(session, "user-1")
+    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
+    with pytest.raises(ValidationError):
+        svc.upload_new_document(
+            b"v1", ContentType.TEXTO, "r.txt", DocumentCategory.TEXT, user, "ghost-cat"
+        )
+
+
+def test_upload_to_category_outside_scope_is_forbidden(session):
+    user = _seed_user(session, "user-1")
+    cat = _seed_category(session)
+    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
+    with pytest.raises(ForbiddenError):
+        svc.upload_new_document(
+            b"v1", ContentType.TEXTO, "r.txt", DocumentCategory.TEXT, user, cat,
+            allowed_category_ids=["other-cat"],
+        )
 
 
 def test_add_version_invalidates_cache(session):
@@ -207,3 +238,38 @@ def test_delete_document_invalidates_cache(session):
     before = cache.invalidate_calls
     svc.delete_document(doc_id)
     assert cache.invalidate_calls == before + 1
+
+
+def _upload(svc, file_name, category_id):
+    return svc.upload_new_document(
+        b"x", ContentType.TEXTO, file_name, DocumentCategory.TEXT, "u1", category_id
+    )["document_id"]
+
+
+def test_list_documents_scoped_to_allowed_categories(session):
+    _seed_user(session, "u1")
+    _seed_category(session, "cat-1")
+    _seed_category(session, "cat-2")
+    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
+    _upload(svc, "a.txt", "cat-1")
+    _upload(svc, "b.txt", "cat-2")
+
+    scoped = svc.list_documents(allowed_category_ids=["cat-1"])
+    assert {d["file_name"] for d in scoped["items"]} == {"a.txt"}
+
+    unrestricted = svc.list_documents(allowed_category_ids=None)
+    assert {d["file_name"] for d in unrestricted["items"]} == {"a.txt", "b.txt"}
+
+
+def test_get_document_outside_scope_is_hidden(session):
+    _seed_user(session, "u1")
+    _seed_category(session, "cat-1")
+    _seed_category(session, "cat-2")
+    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
+    other_doc = _upload(svc, "secret.txt", "cat-2")
+
+    # A user scoped to cat-1 must not even learn that the cat-2 doc exists.
+    with pytest.raises(NotFoundError):
+        svc.get_document(other_doc, allowed_category_ids=["cat-1"])
+
+    assert svc.get_document(other_doc, allowed_category_ids=None)["id"] == other_doc

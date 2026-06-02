@@ -20,6 +20,7 @@ class IVectorIndexService(ABC):
         chunks: list[str],
         embeddings: list[list[float]],
         pages_per_chunk: list[int | None] | None = None,
+        category_id: str | None = None,
     ) -> int: ...
 
     @abstractmethod
@@ -34,4 +35,5 @@ class IVectorIndexService(ABC):
         query: str,
         n_results: int = 5,
         embedding: list[float] | None = None,
+        allowed_category_ids: list[str] | None = None,
     ) -> list[dict]: ...

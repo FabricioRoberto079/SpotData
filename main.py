@@ -21,7 +21,9 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from src.auth import limiter
+from src.controllers.admin_controller import router as admin_router
 from src.controllers.auth_controller import router as auth_router
+from src.controllers.categories_controller import router as categories_router
 from src.controllers.chat_controller import router as chat_router
 from src.controllers.document_controller import router as document_router
 from src.controllers.folder_controller import chat_folder_router
@@ -102,6 +104,8 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(categories_router)
 app.include_router(document_router)
 app.include_router(chat_folder_router)
 app.include_router(chat_router)
@@ -179,6 +183,8 @@ def _custom_openapi():
 
     schema["tags"] = [
         {"name": "auth", "description": "Registration, login and current-user introspection."},
+        {"name": "admin", "description": "Admin-only: manage categories, users and category access."},
+        {"name": "categories", "description": "Categories the current user can access."},
         {"name": "documents", "description": "Upload, versioning and semantic search."},
         {"name": "chat-folders", "description": "Folder tree for chats."},
         {"name": "chats", "description": "Conversations and RAG messages (search + LLM + citations)."},

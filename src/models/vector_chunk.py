@@ -26,10 +26,14 @@ class VectorChunk(BaseModel):
         ),
         Index("ix_vector_chunks_document_id", "document_id"),
         Index("ix_vector_chunks_is_latest", "is_latest"),
+        Index("ix_vector_chunks_category_latest", "category_id", "is_latest"),
     )
 
     document_id: Mapped[str] = mapped_column(
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False
+    )
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True
     )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
