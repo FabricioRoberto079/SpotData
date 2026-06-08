@@ -120,13 +120,6 @@ def test_search_empty_query_returns_empty(session, fake_llm):
     assert svc.search("   ") == []
 
 
-def test_search_returns_empty_for_restricted_user_without_grants(session, fake_llm):
-    # A non-admin with an empty allowed list can match nothing — guards against
-    # an unscoped query leaking every category's chunks.
-    svc = VectorIndexService(session, TextChunker(), fake_llm)
-    assert svc.search("anything", allowed_category_ids=[]) == []
-
-
 def test_commit_persists_category_id(session, fake_llm):
     _seed_document(session)
     session.add(Category(id="cat-9", name="Nove", slug="nove"))

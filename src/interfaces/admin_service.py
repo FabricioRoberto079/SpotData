@@ -17,16 +17,6 @@ class IAdminService(ABC):
     @abstractmethod
     def delete_category(self, category_id: str) -> None: ...
 
-    # --- user <-> category grants ---
-    @abstractmethod
-    def assign_category(self, user_id: str, category_id: str) -> None: ...
-
-    @abstractmethod
-    def unassign_category(self, user_id: str, category_id: str) -> None: ...
-
-    @abstractmethod
-    def categories_for_user(self, user_id: str) -> list[dict]: ...
-
     # --- user management ---
     @abstractmethod
     def list_users(self) -> list[dict]: ...

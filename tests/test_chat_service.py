@@ -6,6 +6,7 @@ import pytest
 from src.enums.response_status import ResponseStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.integrations.llm import LlmError
+from src.models.category import Category
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
 from src.models.knowledge_document import KnowledgeDocument
@@ -148,6 +149,54 @@ def test_ask_stream_emits_tokens_and_persists_full_text(session):
     assert stored.response_text == "você vai para a copa"
     assert stored.status == ResponseStatus.SUCCESS.value
     assert session.get(Query, query_id).chat_id == chat_id
+
+
+def test_ask_stream_new_chat_scopes_search_to_chosen_category(session):
+    session.add(Category(id="cat-rh", name="RH", slug="rh"))
+    session.add(KnowledgeDocument(id="doc-1", file_name="a.txt", category="documents"))
+    session.commit()
+
+    partials = make_structured_partials(
+        answer="resposta",
+        citations=[{"context_index": 0, "confidence": 0.9}],
+    )
+    index = StubVectorIndex(results=_contexts())
+    svc = ChatService(session, index, FakeLlm(structured_partials=partials), StubQaCache())
+
+    events = _run_stream(svc, question="Qual a copa?", category_id="cat-rh")
+    chat_id = events[0]["chat_id"]
+
+    # the chosen category is stored on the chat and used to scope retrieval
+    assert session.get(Chat, chat_id).category_id == "cat-rh"
+    assert index.last_search_scope == "cat-rh"
+
+    # a follow-up on the same chat reuses its category without re-sending it
+    _run_stream(svc, question="E agora?", chat_id=chat_id)
+    assert index.last_search_scope == "cat-rh"
+
+
+def test_ask_stream_categoryless_chat_searches_every_category(session):
+    session.add(KnowledgeDocument(id="doc-1", file_name="a.txt", category="documents"))
+    session.commit()
+
+    partials = make_structured_partials(
+        answer="resposta",
+        citations=[{"context_index": 0, "confidence": 0.9}],
+    )
+    index = StubVectorIndex(results=_contexts())
+    svc = ChatService(session, index, FakeLlm(structured_partials=partials), StubQaCache())
+
+    events = _run_stream(svc, question="Qual a copa?")
+    chat_id = events[0]["chat_id"]
+
+    assert session.get(Chat, chat_id).category_id is None
+    assert index.last_search_scope is None
+
+
+def test_ask_stream_unknown_category_raises_validation(session):
+    svc = _make_service(session)
+    with pytest.raises(ValidationError):
+        _run_stream(svc, question="oi", category_id="ghost-cat")
 
 
 def test_ask_stream_emits_citations_before_tokens_with_page(session):

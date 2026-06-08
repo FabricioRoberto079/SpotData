@@ -13,7 +13,6 @@ from src.interfaces.document_service import IDocumentService
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.user import User
 from src.schemas.document import DocumentList, DocumentOut, SearchResults
-from src.services.access import get_allowed_category_ids
 from src.services.document_service import get_document_service
 from src.services.upload_strategies import get_upload_strategy
 from src.services.vector_index_service import get_vector_index_service
@@ -59,19 +58,13 @@ def _file_response(
 async def list_all_documents(
     category_id: str | None = Query(
         default=None,
-        description="Optional. Filter by category id. Omit to list everything you can access.",
+        description="Optional. Filter by category id. Omit to list every category.",
     ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
-    return document_service.list_documents(
-        category_id,
-        limit=limit,
-        offset=offset,
-        allowed_category_ids=allowed_category_ids,
-    )
+    return document_service.list_documents(category_id, limit=limit, offset=offset)
 
 
 @router.post(
@@ -82,20 +75,20 @@ async def list_all_documents(
         "- `file` → send `file` (PDF, DOC, DOCX, TXT, MD).\n"
         "- `image` → send `file` (PNG, JPG, JPEG).\n"
         "- `text` → send `text` (plain text body).\n\n"
-        "Requires a `category_id` you have access to. "
+        "Optional `category_id` scopes the document to a category; omit it to "
+        "share with everyone. "
         "Optional `file_name` overrides the stored name. Viewers cannot upload."
     ),
 )
 async def upload_document(
     kind: UploadKind = Form(..., description="Strategy: 'file', 'image' or 'text'."),
-    category_id: str = Form(
-        ..., description="Target category id. Must be one you are linked to."
+    category_id: str | None = Form(
+        default=None, description="Optional target category id. Omit to share with everyone."
     ),
     file: UploadFile | None = File(default=None),
     text: str | None = Form(default=None),
     file_name: str | None = Form(default=None),
     current_user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     try:
@@ -114,7 +107,6 @@ async def upload_document(
         payload.category,
         current_user.id,
         category_id,
-        allowed_category_ids,
     )
     return {"message": _upload_message(result), **result}
 
@@ -127,13 +119,16 @@ async def upload_document(
 async def search_documents(
     q: str,
     n_results: int = Query(default=5, ge=1, le=20),
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
+    category_id: str | None = Query(
+        default=None,
+        description="Optional. Limit the search to a single category. Omit to search every category.",
+    ),
     vector_index: IVectorIndexService = Depends(get_vector_index_service),
 ):
     if not q.strip():
         raise ValidationError("Empty query.")
     results = await asyncio.to_thread(
-        vector_index.search, q, n_results, None, allowed_category_ids
+        vector_index.search, q, n_results, None, category_id
     )
     return {"query": q, "results": results}
 
@@ -141,38 +136,27 @@ async def search_documents(
 @router.get("/{document_id}", response_model=DocumentOut)
 async def get_document_metadata(
     document_id: str,
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
-    return document_service.get_document(
-        document_id, allowed_category_ids=allowed_category_ids
-    )
+    return document_service.get_document(document_id)
 
 
 @router.delete("/{document_id}")
 async def delete_document_endpoint(
     document_id: str,
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
-    document_service.delete_document(
-        document_id, allowed_category_ids=allowed_category_ids
-    )
+    document_service.delete_document(document_id)
     return {"message": "Document removed."}
 
 
 @router.get("/{document_id}/download")
 async def download_latest(
     document_id: str,
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     return _file_response(
-        *document_service.get_version_file(
-            document_id,
-            version_number=None,
-            allowed_category_ids=allowed_category_ids,
-        )
+        *document_service.get_version_file(document_id, version_number=None)
     )
 
 
@@ -180,13 +164,10 @@ async def download_latest(
 async def download_version(
     document_id: str,
     version_number: int,
-    allowed_category_ids: list[str] | None = Depends(get_allowed_category_ids),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     return _file_response(
         *document_service.get_version_file(
-            document_id,
-            version_number=version_number,
-            allowed_category_ids=allowed_category_ids,
+            document_id, version_number=version_number
         )
     )

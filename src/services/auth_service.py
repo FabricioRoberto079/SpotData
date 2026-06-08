@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from src.auth import (
@@ -16,11 +16,8 @@ from src.exceptions import ConflictError, UnauthorizedError
 from src.integrations.email import get_email_sender
 from src.interfaces.auth_service import IAuthService
 from src.interfaces.email_sender import IEmailSender
-from src.models.category import Category
 from src.models.password_reset_code import PasswordResetCode
 from src.models.user import User
-from src.models.user_category import user_categories
-from src.services.admin_service import DEFAULT_CATEGORY_NAME, DEFAULT_CATEGORY_SLUG
 
 # Reset codes are short-lived and brute-force limited. These are deliberate
 # constants, not env config — tune here if the policy changes.
@@ -60,19 +57,6 @@ class AuthService(IAuthService):
         self._session = session
         self._email_sender = email_sender or get_email_sender()
 
-    def _ensure_default_category(self) -> Category:
-        """Get (or lazily create) the default category every new user is linked to."""
-        category = self._session.execute(
-            select(Category).where(Category.slug == DEFAULT_CATEGORY_SLUG)
-        ).scalar_one_or_none()
-        if category is None:
-            category = Category(
-                name=DEFAULT_CATEGORY_NAME, slug=DEFAULT_CATEGORY_SLUG
-            )
-            self._session.add(category)
-            self._session.flush()
-        return category
-
     def register(self, name: str, email: str, password: str) -> dict:
         email_norm = email.strip().lower()
         try:
@@ -89,17 +73,6 @@ class AuthService(IAuthService):
                 password_hash=hash_password(password),
             )
             self._session.add(user)
-            self._session.flush()
-
-            # New users start linked to the default category so they can search
-            # something immediately; the admin grants further access later.
-            default_category = self._ensure_default_category()
-            self._session.execute(
-                insert(user_categories).values(
-                    user_id=user.id, category_id=default_category.id
-                )
-            )
-
             self._session.commit()
             self._session.refresh(user)
         except Exception:

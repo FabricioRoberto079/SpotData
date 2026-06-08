@@ -8,7 +8,7 @@ from src.data.postgres_client import get_session
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.enums.vectorization_status import VectorizationStatus
-from src.exceptions import ForbiddenError, NotFoundError, ValidationError
+from src.exceptions import NotFoundError, ValidationError
 from src.interfaces.document_service import IDocumentService
 from src.interfaces.qa_cache import IQaCache
 from src.interfaces.text_extractor import ITextExtractor
@@ -46,31 +46,18 @@ class DocumentService(IDocumentService):
     def _demote_previous_versions(self, document_id: str) -> None:
         self._vector_index.demote_latest(document_id)
 
-    def _load_accessible(
-        self, document_id: str, allowed_category_ids: list[str] | None
-    ) -> KnowledgeDocument:
-        """Load a document or raise NotFoundError. When allowed_category_ids is given
-        (non-admin), documents outside those categories are treated as if they did not
-        exist (avoids leaking existence)."""
+    def _load(self, document_id: str) -> KnowledgeDocument:
+        """Load a document or raise NotFoundError."""
         doc = self._session.get(KnowledgeDocument, document_id)
         if doc is None:
             raise NotFoundError(f"Document not found: {document_id}")
-        if (
-            allowed_category_ids is not None
-            and doc.category_id not in allowed_category_ids
-        ):
-            raise NotFoundError(f"Document not found: {document_id}")
         return doc
 
-    def _assert_category_usable(
-        self, category_id: str, allowed_category_ids: list[str] | None
-    ) -> None:
-        """Validate a target category for upload: it must exist and be granted to the
-        user (admins, with allowed_category_ids=None, may use any existing category)."""
+    def _assert_category_exists(self, category_id: str) -> None:
+        """Validate a target category for upload: it must exist. Every user may use
+        any existing category."""
         if self._session.get(Category, category_id) is None:
             raise ValidationError(f"Unknown category: {category_id}")
-        if allowed_category_ids is not None and category_id not in allowed_category_ids:
-            raise ForbiddenError("You don't have access to this category.")
 
     @staticmethod
     def _serialize_document(doc: KnowledgeDocument) -> dict:
@@ -199,11 +186,11 @@ class DocumentService(IDocumentService):
         category: DocumentCategory,
         uploaded_by: str | None = None,
         category_id: str | None = None,
-        allowed_category_ids: list[str] | None = None,
     ) -> dict:
-        if category_id is None:
-            raise ValidationError("category_id is required.")
-        self._assert_category_usable(category_id, allowed_category_ids)
+        # No category means the document is shared ("de todos"); only validate
+        # when one was actually chosen.
+        if category_id is not None:
+            self._assert_category_exists(category_id)
 
         # Extraction/embedding happen inside add_version; calling them here just to
         # validate would double the cost (the embedding API runs twice).
@@ -248,9 +235,8 @@ class DocumentService(IDocumentService):
         self,
         document_id: str,
         version_number: int | None = None,
-        allowed_category_ids: list[str] | None = None,
     ) -> tuple[bytes, str, str, int]:
-        doc = self._load_accessible(document_id, allowed_category_ids)
+        doc = self._load(document_id)
         if not doc.versions:
             raise NotFoundError(f"Document {document_id} has no versions.")
 
@@ -276,11 +262,8 @@ class DocumentService(IDocumentService):
         category_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
-        allowed_category_ids: list[str] | None = None,
     ) -> dict:
         filters = []
-        if allowed_category_ids is not None:
-            filters.append(KnowledgeDocument.category_id.in_(allowed_category_ids))
         if category_id is not None:
             filters.append(KnowledgeDocument.category_id == category_id)
 
@@ -307,17 +290,13 @@ class DocumentService(IDocumentService):
             "offset": offset,
         }
 
-    def get_document(
-        self, document_id: str, allowed_category_ids: list[str] | None = None
-    ) -> dict:
-        doc = self._load_accessible(document_id, allowed_category_ids)
+    def get_document(self, document_id: str) -> dict:
+        doc = self._load(document_id)
         return self._serialize_document(doc)
 
-    def delete_document(
-        self, document_id: str, allowed_category_ids: list[str] | None = None
-    ) -> None:
+    def delete_document(self, document_id: str) -> None:
         try:
-            doc = self._load_accessible(document_id, allowed_category_ids)
+            doc = self._load(document_id)
             self._vector_index.purge_document(document_id)
             self._session.delete(doc)
             self._session.commit()

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
 
 from src.auth import require_user
-from src.enums.user_role import UserRole
 from src.interfaces.admin_service import IAdminService
 from src.models.user import User
 from src.schemas.admin import CategoryOut
@@ -13,14 +12,12 @@ router = APIRouter(prefix="/categories", tags=["categories"])
 @router.get(
     "",
     response_model=list[CategoryOut],
-    summary="List the categories the current user can access",
+    summary="List all categories",
 )
-async def list_my_categories(
-    current_user: User = Depends(require_user),
+async def list_categories(
+    _user: User = Depends(require_user),
     admin_service: IAdminService = Depends(get_admin_service),
 ):
-    """Admins see every category; everyone else sees only the ones they are linked
-    to. Used by the frontend to populate the upload/filter category pickers."""
-    if current_user.role == UserRole.ADMIN.value:
-        return admin_service.list_categories()
-    return admin_service.categories_for_user(current_user.id)
+    """Every authenticated user can access every category. Used by the frontend to
+    populate the upload/filter and the chat-creation category pickers."""
+    return admin_service.list_categories()

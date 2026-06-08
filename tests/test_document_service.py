@@ -2,7 +2,7 @@ import pytest
 
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
-from src.exceptions import ForbiddenError, NotFoundError, ValidationError
+from src.exceptions import NotFoundError, ValidationError
 from src.interfaces.text_extractor import ITextExtractor
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.category import Category
@@ -77,7 +77,7 @@ class _StubIndex(IVectorIndexService):
     def purge_document(self, document_id):
         self.purged.append(document_id)
 
-    def search(self, query, n_results=5, embedding=None, allowed_category_ids=None):
+    def search(self, query, n_results=5, embedding=None, category_id=None):
         return []
 
 
@@ -188,17 +188,6 @@ def test_upload_unknown_category_raises_validation(session):
         )
 
 
-def test_upload_to_category_outside_scope_is_forbidden(session):
-    user = _seed_user(session, "user-1")
-    cat = _seed_category(session)
-    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
-    with pytest.raises(ForbiddenError):
-        svc.upload_new_document(
-            b"v1", ContentType.TEXTO, "r.txt", DocumentCategory.TEXT, user, cat,
-            allowed_category_ids=["other-cat"],
-        )
-
-
 def test_add_version_invalidates_cache(session):
     cache = StubQaCache()
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), cache)
@@ -246,7 +235,7 @@ def _upload(svc, file_name, category_id):
     )["document_id"]
 
 
-def test_list_documents_scoped_to_allowed_categories(session):
+def test_list_documents_filters_by_category(session):
     _seed_user(session, "u1")
     _seed_category(session, "cat-1")
     _seed_category(session, "cat-2")
@@ -254,22 +243,8 @@ def test_list_documents_scoped_to_allowed_categories(session):
     _upload(svc, "a.txt", "cat-1")
     _upload(svc, "b.txt", "cat-2")
 
-    scoped = svc.list_documents(allowed_category_ids=["cat-1"])
-    assert {d["file_name"] for d in scoped["items"]} == {"a.txt"}
+    filtered = svc.list_documents(category_id="cat-1")
+    assert {d["file_name"] for d in filtered["items"]} == {"a.txt"}
 
-    unrestricted = svc.list_documents(allowed_category_ids=None)
-    assert {d["file_name"] for d in unrestricted["items"]} == {"a.txt", "b.txt"}
-
-
-def test_get_document_outside_scope_is_hidden(session):
-    _seed_user(session, "u1")
-    _seed_category(session, "cat-1")
-    _seed_category(session, "cat-2")
-    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
-    other_doc = _upload(svc, "secret.txt", "cat-2")
-
-    # A user scoped to cat-1 must not even learn that the cat-2 doc exists.
-    with pytest.raises(NotFoundError):
-        svc.get_document(other_doc, allowed_category_ids=["cat-1"])
-
-    assert svc.get_document(other_doc, allowed_category_ids=None)["id"] == other_doc
+    everything = svc.list_documents()
+    assert {d["file_name"] for d in everything["items"]} == {"a.txt", "b.txt"}
