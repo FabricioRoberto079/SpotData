@@ -2,7 +2,7 @@ import logging
 import re
 
 from fastapi import Depends
-from sqlalchemy import delete, func, literal_column, select, update
+from sqlalchemy import delete, func, literal_column, or_, select, update
 from sqlalchemy.orm import Session
 
 from src.data.postgres_client import get_session
@@ -135,14 +135,10 @@ class VectorIndexService(IVectorIndexService):
         query: str,
         n_results: int = 5,
         embedding: list[float] | None = None,
-        allowed_category_ids: list[str] | None = None,
+        category_id: str | None = None,
     ) -> list[dict]:
         query = (query or "").strip()
         if not query:
-            return []
-
-        # Restricted users (non-admin) with no granted categories can match nothing.
-        if allowed_category_ids is not None and not allowed_category_ids:
             return []
 
         if embedding is None:
@@ -150,26 +146,31 @@ class VectorIndexService(IVectorIndexService):
 
         dialect = self._session.bind.dialect.name if self._session.bind else ""
         if dialect == "postgresql":
-            return self._search_hybrid(
-                query, n_results, embedding, allowed_category_ids
-            )
-        return self._search_semantic(n_results, embedding, allowed_category_ids)
+            return self._search_hybrid(query, n_results, embedding, category_id)
+        return self._search_semantic(n_results, embedding, category_id)
 
     @staticmethod
-    def _scope(stmt, allowed_category_ids: list[str] | None):
-        """Append the category-access filter. ``None`` means unrestricted (admin)."""
-        if allowed_category_ids is None:
+    def _scope(stmt, category_id: str | None):
+        """Limit the search to a single category. Uncategorized chunks
+        (``category_id`` NULL) belong to everyone, so they're always included.
+        ``None`` means search across every category."""
+        if category_id is None:
             return stmt
-        return stmt.where(VectorChunk.category_id.in_(allowed_category_ids))
+        return stmt.where(
+            or_(
+                VectorChunk.category_id == category_id,
+                VectorChunk.category_id.is_(None),
+            )
+        )
 
     def _search_semantic(
         self,
         n_results: int,
         embedding: list[float],
-        allowed_category_ids: list[str] | None = None,
+        category_id: str | None = None,
     ) -> list[dict]:
         distance = VectorChunk.embedding.cosine_distance(embedding)
-        stmt = self._scope(self._search_select(distance), allowed_category_ids)
+        stmt = self._scope(self._search_select(distance), category_id)
         rows = self._session.execute(
             stmt.order_by(distance.asc()).limit(n_results)
         ).all()
@@ -181,7 +182,7 @@ class VectorIndexService(IVectorIndexService):
         query: str,
         n_results: int,
         embedding: list[float],
-        allowed_category_ids: list[str] | None = None,
+        category_id: str | None = None,
     ) -> list[dict]:
         distance = VectorChunk.embedding.cosine_distance(embedding)
         semantic_rows = self._session.execute(
@@ -189,7 +190,7 @@ class VectorIndexService(IVectorIndexService):
                 select(VectorChunk.id, distance.label("distance")).where(
                     VectorChunk.is_latest.is_(True)
                 ),
-                allowed_category_ids,
+                category_id,
             )
             .order_by(distance.asc())
             .limit(HYBRID_CANDIDATE_K)
@@ -206,7 +207,7 @@ class VectorIndexService(IVectorIndexService):
                     select(VectorChunk.id, rank.label("rank"))
                     .where(VectorChunk.is_latest.is_(True))
                     .where(tsv.op("@@")(tsquery)),
-                    allowed_category_ids,
+                    category_id,
                 )
                 .order_by(rank.desc())
                 .limit(HYBRID_CANDIDATE_K)

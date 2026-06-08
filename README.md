@@ -112,11 +112,13 @@ Auth obrigatória (JWT) em tudo, exceto `POST /auth/register`, `POST /auth/login
 
 ### Papéis e acesso por categoria
 
-Três papéis (`users.role`): **`admin`** (cria categorias, gerencia usuários e vincula usuários ↔ categorias), **`editor`** (sobe e consulta documentos) e **`viewer`** (só consulta). Quem se registra por `POST /auth/register` nasce `viewer` já vinculado à categoria default **`GERAL`** — o admin concede acesso a outras categorias depois.
+Três papéis (`users.role`): **`admin`** (cria categorias e gerencia usuários), **`editor`** (sobe e consulta documentos) e **`viewer`** (só consulta). Quem se registra por `POST /auth/register` nasce `viewer`. Não há mais vínculo usuário ↔ categoria nem categoria default: **todo usuário autenticado enxerga todas as categorias**.
 
 Categorias são normalizadas na criação: acentos e caracteres especiais removidos, espaços internos viram `_`, pontas aparadas, salvas em UPPERCASE (ex.: `"  Recursos   Humanos! "` → `RECURSOS_HUMANOS`). O `slug` é a versão minúscula, usado como chave única.
 
-Documentos pertencem a uma categoria. Listagem, busca (`/documents/search`) e RAG do chat só enxergam as categorias vinculadas ao usuário; o admin vê tudo. O upload exige um `category_id` ao qual o usuário tenha acesso e papel `editor`/`admin`.
+A categoria agora serve para **escopar a recuperação**, não para restringir acesso. Um documento pode pertencer a uma categoria ou ficar sem nenhuma — documento sem categoria é compartilhado ("de todos") e aparece em qualquer busca. Listagem (`GET /documents`) e busca (`/documents/search`) aceitam um `category_id` opcional para filtrar; sem ele, varrem todas as categorias. O upload tem `category_id` opcional (omita para compartilhar com todos) e exige papel `editor`/`admin`.
+
+O chat escolhe a categoria **na criação** (campo `category_id` da primeira mensagem): o RAG daquele chat fica restrito a essa categoria — mais os documentos sem categoria — e mensagens seguintes herdam a escolha. Sem `category_id`, o chat busca em todas as categorias.
 
 > **Bootstrap do admin:** a migração não tem como saber quem é admin. Depois de migrar, promova um usuário manualmente:
 > ```sql

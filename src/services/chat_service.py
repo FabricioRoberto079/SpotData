@@ -16,6 +16,7 @@ from src.integrations.llm import LlmClient, LlmError, get_llm_client
 from src.interfaces.chat_service import IChatService
 from src.interfaces.qa_cache import IQaCache
 from src.interfaces.vector_index_service import IVectorIndexService
+from src.models.category import Category
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
 from src.models.document_version import DocumentVersion
@@ -56,6 +57,7 @@ class ChatService(IChatService):
             "title": chat.title,
             "folder_id": chat.folder_id,
             "user_id": chat.user_id,
+            "category_id": chat.category_id,
             "created_at": chat.created_at.isoformat() if chat.created_at else None,
         }
 
@@ -313,7 +315,11 @@ class ChatService(IChatService):
         return text
 
     def _resolve_or_create_chat(
-        self, chat_id: str | None, question: str, user_id: str | None
+        self,
+        chat_id: str | None,
+        question: str,
+        user_id: str | None,
+        category_id: str | None = None,
     ) -> str:
         if chat_id is not None:
             self._load_owned(chat_id, user_id)
@@ -321,10 +327,23 @@ class ChatService(IChatService):
         chat = Chat(
             title=self._chat_title_from_question(question),
             user_id=user_id,
+            category_id=category_id,
         )
         self._session.add(chat)
         self._session.flush()
         return chat.id
+
+    def _resolve_scope_category(
+        self, chat_id: str | None, category_id: str | None, user_id: str | None
+    ) -> str | None:
+        """Category id the retrieval must be limited to. An existing chat uses the
+        category chosen when it was created; a new chat uses the requested one
+        (validated here). ``None`` means search across every category."""
+        if chat_id is not None:
+            return self._load_owned(chat_id, user_id).category_id
+        if category_id is not None and self._session.get(Category, category_id) is None:
+            raise ValidationError(f"Unknown category: {category_id}")
+        return category_id
 
     def _load_chat_history(self, chat_id: str) -> list[dict]:
         stmt = (
@@ -502,7 +521,7 @@ class ChatService(IChatService):
         question: str,
         chat_id: str | None = None,
         user_id: str | None = None,
-        allowed_category_ids: list[str] | None = None,
+        category_id: str | None = None,
     ) -> AsyncIterator[dict]:
         question = question.strip()
         if not question:
@@ -510,10 +529,14 @@ class ChatService(IChatService):
 
         started = time.perf_counter()
 
-        # The Q&A cache is global; a cached answer may draw on categories the asker
-        # cannot see. Only admins (unrestricted) read/write it — restricted users
-        # always recompute against their own category scope.
-        use_cache = allowed_category_ids is None
+        # Retrieval is scoped to the chat's category (chosen at creation). For a new
+        # chat the requested category_id is used and stored on it.
+        scope_category_id = self._resolve_scope_category(chat_id, category_id, user_id)
+
+        # The Q&A cache is global; a cached answer may draw on a different category
+        # than the chat is scoped to. Only category-less chats (which search every
+        # category) read/write it — scoped chats always recompute.
+        use_cache = scope_category_id is None
 
         question_embedding: list[float] | None = None
         cached = self._cache.lookup_exact(question) if use_cache else None
@@ -536,11 +559,13 @@ class ChatService(IChatService):
             question,
             RAG_TOP_K,
             question_embedding,
-            allowed_category_ids,
+            scope_category_id,
         )
 
         try:
-            chat_id = self._resolve_or_create_chat(chat_id, question, user_id)
+            chat_id = self._resolve_or_create_chat(
+                chat_id, question, user_id, scope_category_id
+            )
 
             query_row = Query(user_id=user_id, chat_id=chat_id, question=question)
             self._session.add(query_row)

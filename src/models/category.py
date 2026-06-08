@@ -1,8 +1,7 @@
 from sqlalchemy import ForeignKey, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base_model import BaseModel
-from src.models.user_category import user_categories
 
 
 class Category(BaseModel):
@@ -12,8 +11,4 @@ class Category(BaseModel):
     slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
-    )
-
-    users: Mapped[list["User"]] = relationship(
-        secondary=user_categories, back_populates="assigned_categories"
     )

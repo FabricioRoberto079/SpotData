@@ -27,5 +27,5 @@ class IChatService(ABC):
         question: str,
         chat_id: str | None = None,
         user_id: str | None = None,
-        allowed_category_ids: list[str] | None = None,
+        category_id: str | None = None,
     ) -> AsyncIterator[dict]: ...

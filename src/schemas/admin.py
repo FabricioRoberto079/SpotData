@@ -20,10 +20,6 @@ class CategoryOut(BaseModel):
     created_at: str | None = None
 
 
-class AssignCategoryRequest(BaseModel):
-    category_id: str
-
-
 class AdminUserOut(BaseModel):
     id: str
     name: str

@@ -138,17 +138,3 @@ def test_reset_password_unknown_email_raises(session):
             "ghost@x.com", "123456", "newpass456"
         )
 
-
-def test_register_links_user_to_default_category(session):
-    from src.models.category import Category
-    from src.services.access import allowed_category_ids
-    from src.services.admin_service import DEFAULT_CATEGORY_SLUG
-
-    _register(session, FakeEmailSender(), email="new@x.com")
-    user = _user(session, "new@x.com")
-
-    geral = session.scalars(
-        select(Category).where(Category.slug == DEFAULT_CATEGORY_SLUG)
-    ).one()
-    assert allowed_category_ids(session, user) == [geral.id]
-

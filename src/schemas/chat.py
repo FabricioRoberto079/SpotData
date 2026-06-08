@@ -10,6 +10,7 @@ class ChatOut(BaseModel):
     title: str
     folder_id: str | None = None
     user_id: str | None = None
+    category_id: str | None = None
     created_at: str | None = None
 
 
@@ -38,3 +39,7 @@ class ChatUpdate(BaseModel):
 class MessageCreate(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     chat_id: str | None = None
+    # Chosen only when starting a new chat (chat_id is null); stored on the chat and
+    # used to scope retrieval. Omit (or null) to search across every category.
+    # Ignored for an existing chat, which keeps the category it was created with.
+    category_id: str | None = None

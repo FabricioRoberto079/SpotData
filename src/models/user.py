@@ -20,6 +20,3 @@ class User(BaseModel):
 
     documents: Mapped[list["KnowledgeDocument"]] = relationship(back_populates="uploaded_by_user")
     queries: Mapped[list["Query"]] = relationship(back_populates="user")
-    assigned_categories: Mapped[list["Category"]] = relationship(
-        secondary="user_categories", back_populates="users"
-    )

@@ -143,8 +143,8 @@ class StubVectorIndex(IVectorIndexService):
     def purge_document(self, document_id):
         pass
 
-    def search(self, query, n_results=5, embedding=None, allowed_category_ids=None):
-        self.last_search_scope = allowed_category_ids
+    def search(self, query, n_results=5, embedding=None, category_id=None):
+        self.last_search_scope = category_id
         return self._results
 
 

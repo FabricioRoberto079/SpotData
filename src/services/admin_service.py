@@ -2,7 +2,7 @@ import re
 import unicodedata
 
 from fastapi import Depends
-from sqlalchemy import delete, insert, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.data.postgres_client import get_session
@@ -11,11 +11,6 @@ from src.exceptions import ConflictError, NotFoundError, ValidationError
 from src.interfaces.admin_service import IAdminService
 from src.models.category import Category
 from src.models.user import User
-from src.models.user_category import user_categories
-
-# Category every newly-registered user is linked to (see AuthService.register).
-DEFAULT_CATEGORY_NAME = "GERAL"
-DEFAULT_CATEGORY_SLUG = "geral"
 
 
 def normalize_category_name(value: str) -> str:
@@ -132,58 +127,6 @@ class AdminService(IAdminService):
         except Exception:
             self._session.rollback()
             raise
-
-    # --- grants ---
-    def assign_category(self, user_id: str, category_id: str) -> None:
-        try:
-            self._get_user(user_id)
-            self._get_category(category_id)
-            already = self._session.execute(
-                select(user_categories.c.user_id).where(
-                    user_categories.c.user_id == user_id,
-                    user_categories.c.category_id == category_id,
-                )
-            ).first()
-            if already is None:
-                self._session.execute(
-                    insert(user_categories).values(
-                        user_id=user_id, category_id=category_id
-                    )
-                )
-                self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
-
-    def unassign_category(self, user_id: str, category_id: str) -> None:
-        try:
-            self._session.execute(
-                delete(user_categories).where(
-                    user_categories.c.user_id == user_id,
-                    user_categories.c.category_id == category_id,
-                )
-            )
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
-
-    def categories_for_user(self, user_id: str) -> list[dict]:
-        self._get_user(user_id)
-        rows = (
-            self._session.execute(
-                select(Category)
-                .join(
-                    user_categories,
-                    user_categories.c.category_id == Category.id,
-                )
-                .where(user_categories.c.user_id == user_id)
-                .order_by(Category.name)
-            )
-            .scalars()
-            .all()
-        )
-        return [self._category_out(c) for c in rows]
 
     # --- user management ---
     def list_users(self) -> list[dict]:
