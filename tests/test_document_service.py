@@ -195,6 +195,20 @@ def test_add_version_invalidates_cache(session):
     before = cache.invalidate_calls
     svc.add_version(doc_id, b"raw", ContentType.TEXTO)
     assert cache.invalidate_calls == before + 1
+    # No access-control category -> shared document -> whole cache invalidated.
+    assert cache.invalidated_categories[-1] is None
+
+
+def test_add_version_invalidates_only_documents_category(session):
+    _seed_user(session, "u1")
+    _seed_category(session, "cat-1")
+    cache = StubQaCache()
+    svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), cache)
+    doc_id = svc.create_document(
+        "a.txt", DocumentCategory.TEXT, "u1", category_id="cat-1"
+    )
+    svc.add_version(doc_id, b"raw", ContentType.TEXTO)
+    assert cache.invalidated_categories[-1] == "cat-1"
 
 
 def test_add_version_uses_paged_pipeline_when_pages_available(session):
@@ -223,10 +237,15 @@ def test_add_version_no_pages_falls_back_to_flat(session):
 def test_delete_document_invalidates_cache(session):
     cache = StubQaCache()
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), cache)
-    doc_id = svc.create_document("a.txt", DocumentCategory.TEXT)
+    _seed_user(session, "u1")
+    _seed_category(session, "cat-1")
+    doc_id = svc.create_document(
+        "a.txt", DocumentCategory.TEXT, "u1", category_id="cat-1"
+    )
     before = cache.invalidate_calls
     svc.delete_document(doc_id)
     assert cache.invalidate_calls == before + 1
+    assert cache.invalidated_categories[-1] == "cat-1"
 
 
 def _upload(svc, file_name, category_id):

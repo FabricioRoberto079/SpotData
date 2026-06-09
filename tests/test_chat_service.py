@@ -377,6 +377,51 @@ def test_ask_stream_serves_from_cache_emits_citations_before_tokens(session):
     assert llm.embed_calls == []
 
 
+def test_ask_stream_cache_is_scoped_by_category(session):
+    from src.interfaces.qa_cache import question_key
+
+    session.add_all(
+        [
+            Category(id="cat-1", name="cat-1", slug="cat-1"),
+            Category(id="cat-2", name="cat-2", slug="cat-2"),
+            KnowledgeDocument(
+                id="doc-cache", file_name="manual.pdf", category="documents"
+            ),
+        ]
+    )
+    session.commit()
+
+    answer = "A meta é de 12 milhões."
+    cache = StubQaCache()
+    cache.store[question_key("Qual a meta?", "cat-1")] = {
+        "question": "Qual a meta?",
+        "answer": answer,
+        "status": ResponseStatus.SUCCESS.value,
+        "citations": [
+            {
+                "document_id": "doc-cache",
+                "version_number": 1,
+                "excerpt": "meta de 12 milhões",
+                "confidence_score": 0.95,
+                "page": 3,
+            }
+        ],
+    }
+
+    # Empty retrieval, so a real (non-cached) run could never produce the answer
+    # below — only a same-scope cache hit can.
+    svc = ChatService(session, StubVectorIndex(results=[]), FakeLlm(), cache)
+
+    same_scope = _run_stream(svc, question="Qual a meta?", category_id="cat-1")
+    served = "".join(e["content"] for e in same_scope if e["type"] == "token")
+    assert served == answer
+
+    # A different category must never read back cat-1's cached answer.
+    other_scope = _run_stream(svc, question="Qual a meta?", category_id="cat-2")
+    leaked = "".join(e["content"] for e in other_scope if e["type"] == "token")
+    assert leaked != answer
+
+
 def test_ask_stream_rejects_empty_question(session):
     svc = ChatService(session, StubVectorIndex(), FakeLlm(), StubQaCache())
     with pytest.raises(ValidationError):

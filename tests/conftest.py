@@ -153,20 +153,29 @@ class StubQaCache(IQaCache):
         self.store: dict[str, dict] = {}
         self.semantic_hits: dict[str, dict] = {}
         self.invalidate_calls = 0
+        self.invalidated_categories: list[str | None] = []
 
-    def lookup_exact(self, question):
-        return self.store.get(question_key(question))
+    def lookup_exact(self, question, category_id=None):
+        return self.store.get(question_key(question, category_id))
 
-    def lookup_semantic(self, question, embedding):
-        return self.semantic_hits.get(question_key(question))
+    def lookup_semantic(self, question, embedding, category_id=None):
+        return self.semantic_hits.get(question_key(question, category_id))
 
-    def put(self, question, embedding, payload):
-        self.store[question_key(question)] = payload
+    def put(self, question, embedding, payload, category_id=None):
+        self.store[question_key(question, category_id)] = payload
 
     def invalidate_all(self):
         self.invalidate_calls += 1
+        self.invalidated_categories.append(None)
         self.store.clear()
         self.semantic_hits.clear()
+
+    def invalidate_category(self, category_id):
+        self.invalidate_calls += 1
+        self.invalidated_categories.append(category_id)
+        if category_id is None:
+            self.store.clear()
+            self.semantic_hits.clear()
 
     def stats(self):
         return {"size": len(self.store), "invalidations": self.invalidate_calls}

@@ -403,9 +403,12 @@ class ChatService(IChatService):
         user_id: str | None,
         chat_id: str | None,
         started: float,
+        category_id: str | None = None,
     ) -> AsyncIterator[dict]:
         try:
-            chat_id = self._resolve_or_create_chat(chat_id, question, user_id)
+            chat_id = self._resolve_or_create_chat(
+                chat_id, question, user_id, category_id
+            )
             query_row = Query(user_id=user_id, chat_id=chat_id, question=question)
             self._session.add(query_row)
             self._session.flush()
@@ -533,23 +536,24 @@ class ChatService(IChatService):
         # chat the requested category_id is used and stored on it.
         scope_category_id = self._resolve_scope_category(chat_id, category_id, user_id)
 
-        # The Q&A cache is global; a cached answer may draw on a different category
-        # than the chat is scoped to. Only category-less chats (which search every
-        # category) read/write it — scoped chats always recompute.
-        use_cache = scope_category_id is None
-
+        # The Q&A cache is scoped to the chat's category: an answer is only ever
+        # reused for the exact same scope (``None`` = the global, search-everything
+        # chats). This keeps category-restricted answers from leaking into other
+        # categories while still letting scoped chats benefit from the cache.
         question_embedding: list[float] | None = None
-        cached = self._cache.lookup_exact(question) if use_cache else None
+        cached = self._cache.lookup_exact(question, scope_category_id)
         if cached is None:
             embeds = await asyncio.to_thread(self._llm.embed, [question])
             question_embedding = embeds[0]
-            if use_cache:
-                cached = await asyncio.to_thread(
-                    self._cache.lookup_semantic, question, question_embedding
-                )
+            cached = await asyncio.to_thread(
+                self._cache.lookup_semantic,
+                question,
+                question_embedding,
+                scope_category_id,
+            )
         if cached is not None and self._is_valid_cached_payload(cached):
             async for event in self._serve_cached_stream(
-                question, cached, user_id, chat_id, started
+                question, cached, user_id, chat_id, started, scope_category_id
             ):
                 yield event
             return
@@ -686,13 +690,14 @@ class ChatService(IChatService):
                 "time_ms": elapsed,
             }
 
-            if use_cache and question_embedding is not None:
+            if question_embedding is not None:
                 self._cache.put(
                     question,
                     question_embedding,
                     self._build_stream_cache_payload(
                         question, last_answer, citations_payload
                     ),
+                    scope_category_id,
                 )
         except Exception:
             self._session.rollback()
