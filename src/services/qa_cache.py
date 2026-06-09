@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from src.data.postgres_client import SessionLocal
 from src.interfaces.qa_cache import IQaCache, normalize_question, question_key
@@ -22,6 +22,7 @@ QA_CACHE_L2_LOOKUP_NEIGHBORS = 1
 @dataclass
 class _L1Entry:
     payload: dict[str, Any]
+    scope: str | None = None
     hits: int = 0
     last_access: float = field(default_factory=time.monotonic)
 
@@ -43,8 +44,10 @@ class HybridQaCache(IQaCache):
         self._l2_hits = 0
         self._misses = 0
 
-    def lookup_exact(self, question: str) -> dict[str, Any] | None:
-        key = question_key(question)
+    def lookup_exact(
+        self, question: str, category_id: str | None = None
+    ) -> dict[str, Any] | None:
+        key = question_key(question, category_id)
         with self._l1_lock:
             entry = self._l1.get(key)
             if entry is None:
@@ -54,8 +57,10 @@ class HybridQaCache(IQaCache):
             self._l1_hits += 1
             return dict(entry.payload)
 
-    def _put_l1(self, question: str, payload: dict[str, Any]) -> None:
-        key = question_key(question)
+    def _put_l1(
+        self, question: str, payload: dict[str, Any], category_id: str | None
+    ) -> None:
+        key = question_key(question, category_id)
         with self._l1_lock:
             existing = self._l1.get(key)
             if existing is not None:
@@ -68,20 +73,32 @@ class HybridQaCache(IQaCache):
                     key=lambda kv: (kv[1].hits, kv[1].last_access),
                 )[0]
                 self._l1.pop(victim_key, None)
-            self._l1[key] = _L1Entry(payload=payload)
+            self._l1[key] = _L1Entry(payload=payload, scope=category_id)
 
     def _record_miss(self) -> None:
         with self._l1_lock:
             self._misses += 1
 
     def lookup_semantic(
-        self, question: str, embedding: list[float]
+        self,
+        question: str,
+        embedding: list[float],
+        category_id: str | None = None,
     ) -> dict[str, Any] | None:
         try:
             with SessionLocal() as session:
                 distance = QaCacheEntry.embedding.cosine_distance(embedding)
+                # Match the scope exactly: a category chat never reuses a global
+                # answer (which drew on every category) nor another category's,
+                # and a global chat never reuses a narrower category answer.
+                scope = (
+                    QaCacheEntry.category_id.is_(None)
+                    if category_id is None
+                    else QaCacheEntry.category_id == category_id
+                )
                 row = session.execute(
                     select(QaCacheEntry, distance.label("distance"))
+                    .where(scope)
                     .order_by(distance.asc())
                     .limit(QA_CACHE_L2_LOOKUP_NEIGHBORS)
                 ).first()
@@ -105,7 +122,7 @@ class HybridQaCache(IQaCache):
             self._record_miss()
             return None
 
-        self._put_l1(question, payload)
+        self._put_l1(question, payload, category_id)
         with self._l1_lock:
             self._l2_hits += 1
         return dict(payload)
@@ -115,9 +132,10 @@ class HybridQaCache(IQaCache):
         question: str,
         embedding: list[float],
         payload: dict[str, Any],
+        category_id: str | None = None,
     ) -> None:
-        self._put_l1(question, payload)
-        key = question_key(question)
+        self._put_l1(question, payload, category_id)
+        key = question_key(question, category_id)
         try:
             with SessionLocal() as session:
                 existing = session.get(QaCacheEntry, key)
@@ -125,12 +143,14 @@ class HybridQaCache(IQaCache):
                     session.add(
                         QaCacheEntry(
                             question_key=key,
+                            category_id=category_id,
                             normalized_question=normalize_question(question),
                             payload=payload,
                             embedding=embedding,
                         )
                     )
                 else:
+                    existing.category_id = category_id
                     existing.normalized_question = normalize_question(question)
                     existing.payload = payload
                     existing.embedding = embedding
@@ -148,6 +168,40 @@ class HybridQaCache(IQaCache):
                 session.commit()
         except Exception:
             logger.exception("Semantic cache: invalidate_all failed")
+
+    def invalidate_category(self, category_id: str | None) -> None:
+        """Drop cached answers affected by a change to documents in ``category_id``.
+
+        Uncategorized documents (``category_id`` NULL) are shared and surface in
+        every search, so a change to one invalidates the whole cache. A change to
+        a real category X invalidates that category's entries plus the global
+        (scope-less) ones, which may have drawn on X; entries scoped to other
+        categories are left untouched."""
+        if category_id is None:
+            self.invalidate_all()
+            return
+        with self._l1_lock:
+            stale = [
+                key
+                for key, entry in self._l1.items()
+                if entry.scope == category_id or entry.scope is None
+            ]
+            for key in stale:
+                self._l1.pop(key, None)
+            self._generation += 1
+        try:
+            with SessionLocal() as session:
+                session.execute(
+                    delete(QaCacheEntry).where(
+                        or_(
+                            QaCacheEntry.category_id == category_id,
+                            QaCacheEntry.category_id.is_(None),
+                        )
+                    )
+                )
+                session.commit()
+        except Exception:
+            logger.exception("Semantic cache: invalidate_category failed")
 
     def stats(self) -> dict[str, Any]:
         with self._l1_lock:
@@ -170,7 +224,11 @@ class HybridQaCache(IQaCache):
                 "generation": self._generation,
                 "l2_threshold": self._l2_threshold,
                 "l1_top": [
-                    {"hits": e.hits, "question": e.payload.get("question")}
+                    {
+                        "hits": e.hits,
+                        "scope": e.scope,
+                        "question": e.payload.get("question"),
+                    }
                     for e in l1_top
                 ],
             }

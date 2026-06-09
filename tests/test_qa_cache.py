@@ -65,3 +65,49 @@ def test_semantic_lookup_degrades_gracefully_without_db(monkeypatch):
     cache = _make(monkeypatch)
     assert cache.lookup_semantic("q", [0.1] * 4) is None
     assert cache.stats()["misses"] == 1
+
+
+def test_question_key_differs_by_scope_but_stable_within_one():
+    assert question_key("q") != question_key("q", "cat-a")
+    assert question_key("q", "cat-a") != question_key("q", "cat-b")
+    assert question_key("Qual é a meta?", "cat-a") == question_key(
+        "  qual é a META?  ", "cat-a"
+    )
+
+
+def test_l1_lookup_is_isolated_by_scope(monkeypatch):
+    cache = _make(monkeypatch)
+    cache.put("qual a meta?", [0.1] * 4, {"answer": "global"})
+    cache.put("qual a meta?", [0.1] * 4, {"answer": "cat-a"}, "cat-a")
+
+    assert cache.lookup_exact("qual a meta?") == {"answer": "global"}
+    assert cache.lookup_exact("qual a meta?", "cat-a") == {"answer": "cat-a"}
+    # A different category never reads another scope's answer.
+    assert cache.lookup_exact("qual a meta?", "cat-b") is None
+
+
+def test_invalidate_category_drops_scope_and_global_keeps_other_categories(monkeypatch):
+    cache = _make(monkeypatch)
+    cache.put("q", [0.1] * 4, {"answer": "g"})
+    cache.put("q", [0.1] * 4, {"answer": "a"}, "cat-a")
+    cache.put("q", [0.1] * 4, {"answer": "b"}, "cat-b")
+
+    cache.invalidate_category("cat-a")
+
+    assert cache.lookup_exact("q", "cat-a") is None  # changed category dropped
+    assert cache.lookup_exact("q") is None  # global may have drawn on it -> dropped
+    assert cache.lookup_exact("q", "cat-b") == {"answer": "b"}  # untouched
+
+
+def test_invalidate_category_none_clears_everything(monkeypatch):
+    cache = _make(monkeypatch)
+    cache.put("q", [0.1] * 4, {"answer": "g"})
+    cache.put("q", [0.1] * 4, {"answer": "a"}, "cat-a")
+    gen0 = cache.stats()["generation"]
+
+    # A shared (uncategorized) document surfaces in every scope -> full wipe.
+    cache.invalidate_category(None)
+
+    assert cache.lookup_exact("q") is None
+    assert cache.lookup_exact("q", "cat-a") is None
+    assert cache.stats()["generation"] == gen0 + 1

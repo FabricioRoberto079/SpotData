@@ -151,7 +151,7 @@ class DocumentService(IDocumentService):
             self._session.rollback()
             raise
 
-        self._cache.invalidate_all()
+        self._cache.invalidate_category(doc.category_id)
         logger.info(
             "indexed document=%s version=%d chunks=%d",
             document_id,
@@ -297,13 +297,14 @@ class DocumentService(IDocumentService):
     def delete_document(self, document_id: str) -> None:
         try:
             doc = self._load(document_id)
+            category_id = doc.category_id
             self._vector_index.purge_document(document_id)
             self._session.delete(doc)
             self._session.commit()
         except Exception:
             self._session.rollback()
             raise
-        self._cache.invalidate_all()
+        self._cache.invalidate_category(category_id)
 
 
 def get_document_service(
