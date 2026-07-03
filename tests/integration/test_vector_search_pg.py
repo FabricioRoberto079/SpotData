@@ -31,6 +31,8 @@ from src.models.vector_chunk import VectorChunk  # noqa: E402
 from src.services.text_chunker import get_text_chunker  # noqa: E402
 from src.services.vector_index_service import VectorIndexService  # noqa: E402
 
+pytestmark = pytest.mark.integration
+
 # 4-dim embeddings (EMBEDDING_DIMENSION must be 4 for the migration + model).
 # Chunks sit on orthogonal axes so cosine distance is unambiguous.
 _EMB_STORAGE = [1.0, 0.0, 0.0, 0.0]

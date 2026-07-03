@@ -1,4 +1,4 @@
-name: tests
+name: ci
 
 on:
   push:
@@ -6,33 +6,127 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  pytest:
-    name: pytest
-    runs-on: ubuntu-latest
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  lint:
+    name: lint & type-check
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.txt
-
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Mypy (type-check)
+        run: mypy
 
-      - name: Run pytest
+  test:
+    name: unit tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      # main.py reads CORS_ORIGINS at import; postgres_client builds the engine
+      # URL from these (it never connects during the SQLite unit run).
+      POSTGRES_USER: ci
+      POSTGRES_PASSWORD: ci
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ci
+      EMBEDDING_DIMENSION: "4"
+      JWT_SECRET: ci-secret
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRATION_MINUTES: "60"
+      CORS_ORIGINS: "http://localhost:3000"
+      LOG_LEVEL: INFO
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Pytest (with coverage)
+        run: pytest --cov=src --cov-report=term-missing --cov-report=xml
+
+  integration:
+    name: integration (postgres + pgvector)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: "5432"
           POSTGRES_DB: ci
-          LOG_LEVEL: INFO
-          CORS_ORIGINS: "*"
-        run: pytest -q
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_USER: ci
+      POSTGRES_PASSWORD: ci
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ci
+      EMBEDDING_DIMENSION: "4"
+      JWT_SECRET: ci-secret
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRATION_MINUTES: "60"
+      CORS_ORIGINS: "http://localhost:3000"
+      LOG_LEVEL: INFO
+      RUN_INTEGRATION_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Pytest (integration only)
+        run: pytest -m integration tests/integration -v
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    # Advisory: surfaces known CVEs in dependencies without blocking merges.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r requirements.txt
