@@ -21,10 +21,10 @@ if os.getenv("RUN_INTEGRATION_TESTS") != "1":
         allow_module_level=True,
     )
 
-from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+from alembic import command  # noqa: E402
 from src.data.postgres_client import SessionLocal, engine  # noqa: E402
 from src.models.knowledge_document import KnowledgeDocument  # noqa: E402
 from src.models.vector_chunk import VectorChunk  # noqa: E402
