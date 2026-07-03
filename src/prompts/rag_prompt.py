@@ -1,7 +1,6 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
-
 
 STALE_AFTER_DAYS = 365
 
@@ -69,6 +68,14 @@ in the `citations` array.
 
 Rules:
 - Use only information present in the CONTEXT. Do not invent anything.
+- NO PARTIAL COVERAGE FROM GENERAL KNOWLEDGE. The mere presence of a name, term \
+or entity in the CONTEXT does NOT authorize you to describe it from what you \
+already know. Answer ONLY the specific facts literally stated in the CONTEXT \
+snippets. If the CONTEXT merely mentions an entity but does not contain the \
+facts the question asks for, treat the question as NOT covered: set `answer` to \
+an empty string and leave `citations` empty. Example: if the CONTEXT names a \
+person in passing but says nothing about their biography, do NOT supply their \
+biography — return empty. Never blend retrieved snippets with outside knowledge.
 - If the user is greeting, chit-chatting, thanking, saying goodbye, or otherwise \
 NOT asking a question answerable from the CONTEXT (e.g. "oi", "olá", "tudo bem?", \
 "obrigado", "hello", "how are you", "thanks"), set `answer` to an empty string \
@@ -115,7 +122,7 @@ def _format_created_at(value) -> str:
 
 
 def _build_user_content(question: str, contexts: list[dict]) -> str:
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     if contexts:
         context_block = "\n\n".join(
             f"[index={i} file={c.get('file_name')} "

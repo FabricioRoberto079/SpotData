@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain.embeddings import init_embeddings
@@ -126,6 +128,43 @@ def _wrap(call: Callable):
         raise _classify(e) from e
 
 
+# Transient provider failures worth retrying with backoff. Auth, bad-request and
+# schema errors are deterministic — retrying them only wastes time and quota.
+_RETRYABLE_KINDS = {"rate_limit", "timeout", "provider"}
+_EMBED_MAX_ATTEMPTS = 3
+_EMBED_BACKOFF_SECONDS = (0.5, 2.0)
+
+
+def _embed_with_retry(embeddings: Embeddings, texts: list[str]) -> list[list[float]]:
+    """Call embed_documents, retrying transient failures with backoff. A single
+    flaky 429/timeout no longer aborts a whole document ingestion."""
+    last_error: LlmError | None = None
+    for attempt in range(_EMBED_MAX_ATTEMPTS):
+        try:
+            return embeddings.embed_documents(list(texts))
+        except LlmError as err:
+            last_error = err
+            retryable = err.kind in _RETRYABLE_KINDS
+        except Exception as exc:
+            last_error = _classify(exc)
+            retryable = last_error.kind in _RETRYABLE_KINDS
+        if not retryable or attempt == _EMBED_MAX_ATTEMPTS - 1:
+            raise last_error
+        wait = _EMBED_BACKOFF_SECONDS[min(attempt, len(_EMBED_BACKOFF_SECONDS) - 1)]
+        logger.warning(
+            "Embedding call failed (%s); retrying in %.1fs (attempt %d/%d).",
+            last_error.kind,
+            wait,
+            attempt + 1,
+            _EMBED_MAX_ATTEMPTS,
+        )
+        time.sleep(wait)
+    # Unreachable: every iteration either returns or raises. The assert narrows
+    # last_error away from None for the type checker.
+    assert last_error is not None
+    raise last_error
+
+
 class LlmClient:
     async def chat_stream_structured(
         self,
@@ -177,7 +216,7 @@ class LlmClient:
         if not texts:
             return []
         embeddings = _get_embeddings(_resolve_embedding_spec(model))
-        result = _wrap(lambda: embeddings.embed_documents(list(texts)))
+        result = _embed_with_retry(embeddings, texts)
         if not result or len(result) != len(texts):
             raise LlmError(
                 "empty",
