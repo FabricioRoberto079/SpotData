@@ -51,6 +51,8 @@ Sobe Postgres (com pgvector) + API juntos.
    python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
+   # para desenvolvimento (lint, type-check, testes):
+   pip install -r requirements-dev.txt
    ```
 
 3. **Instalar dependências de sistema** (usadas pelos extractors):
@@ -226,9 +228,26 @@ alembic downgrade -1
 
 ---
 
+## Qualidade & testes
+
+```bash
+ruff check .          # lint
+mypy                  # type-check (src + main.py)
+pytest                # unit tests (SQLite em memória)
+
+# testes de integração contra Postgres/pgvector real (busca híbrida):
+RUN_INTEGRATION_TESTS=1 pytest -m integration tests/integration
+```
+
+O CI (`.github/workflows`) roda lint, type-check, testes numa matriz Python
+3.12/3.13, os testes de integração com um serviço pgvector, e um `pip-audit`.
+
 ## Pendências
 
 - Object storage (S3/MinIO) — hoje arquivos são `LargeBinary` no Postgres
 - Rate limiting no endpoint de LLM
-- CI (lint, type-check, tests)
 - Autorização granular (ACL por documento/pasta/chat)
+
+Melhorias maiores de arquitetura/infra (verificação de grounding independente,
+DB assíncrono, vetorização em background, cache compartilhado, índice ANN, CD)
+estão detalhadas em [`ROADMAP.md`](ROADMAP.md).
