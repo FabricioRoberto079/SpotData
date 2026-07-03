@@ -4,7 +4,17 @@ __pycache__
 .env
 .git
 .gitignore
+.github
 .pytest_cache
 .ruff_cache
 .mypy_cache
 README.md
+ROADMAP.md
+tests
+evals
+eval_*.py
+eval_*.json
+pyproject.toml
+requirements-dev.txt
+Dockerfile
+docker-compose.yml
