@@ -1,5 +1,7 @@
 import logging
 import re
+from collections.abc import Sequence
+from typing import Any
 
 from fastapi import Depends
 from sqlalchemy import delete, func, literal_column, or_, select, update
@@ -80,7 +82,7 @@ class VectorIndexService(IVectorIndexService):
         content_type: str,
         chunks: list[str],
         embeddings: list[list[float]],
-        pages_per_chunk: list[int | None] | None = None,
+        pages_per_chunk: list[int] | None = None,
         category_id: str | None = None,
     ) -> int:
         self._session.execute(
@@ -196,10 +198,10 @@ class VectorIndexService(IVectorIndexService):
             .limit(HYBRID_CANDIDATE_K)
         ).all()
 
-        bm25_rows: list = []
+        bm25_rows: Sequence[Any] = []
         tsquery_expr = self._build_or_tsquery(query)
         if tsquery_expr is not None:
-            tsv = literal_column("tsv")
+            tsv: Any = literal_column("tsv")
             tsquery = func.to_tsquery(TS_LANGUAGE, tsquery_expr)
             rank = func.ts_rank_cd(tsv, tsquery)
             bm25_rows = self._session.execute(

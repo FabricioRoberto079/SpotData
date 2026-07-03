@@ -95,7 +95,7 @@ class ChatFolderService(IFolderService):
         if owner_id is not None:
             stmt = stmt.where(ChatFolder.owner_id == owner_id)
         folders = self._session.execute(stmt).scalars().all()
-        return self._build_tree(folders)
+        return self._build_tree(list(folders))
 
     def update(
         self, folder_id: str, fields: dict, owner_id: str | None = None

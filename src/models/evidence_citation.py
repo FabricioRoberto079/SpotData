@@ -1,7 +1,13 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import Float, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base_model import BaseModel
+
+if TYPE_CHECKING:
+    from src.models.knowledge_document import KnowledgeDocument
+    from src.models.response import Response
 
 
 class EvidenceCitation(BaseModel):

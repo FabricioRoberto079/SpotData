@@ -89,7 +89,7 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
 
 cors_origins = os.getenv("CORS_ORIGINS")
@@ -129,8 +129,8 @@ async def _llm_error_handler(request: Request, exc: LlmError):
     )
 
 
-mcp_app.add_exception_handler(DomainError, _domain_error_handler)
-mcp_app.add_exception_handler(LlmError, _llm_error_handler)
+mcp_app.add_exception_handler(DomainError, _domain_error_handler)  # type: ignore[arg-type]
+mcp_app.add_exception_handler(LlmError, _llm_error_handler)  # type: ignore[arg-type]
 app.mount("/mcp", mcp_app)
 
 
@@ -195,7 +195,7 @@ def _custom_openapi():
     return schema
 
 
-app.openapi = _custom_openapi
+app.openapi = _custom_openapi  # type: ignore[method-assign]
 
 
 if __name__ == "__main__":

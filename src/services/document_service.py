@@ -240,16 +240,18 @@ class DocumentService(IDocumentService):
         if not doc.versions:
             raise NotFoundError(f"Document {document_id} has no versions.")
 
+        version: DocumentVersion
         if version_number is None:
             version = max(doc.versions, key=lambda v: v.version_number)
         else:
-            version = next(
+            found = next(
                 (v for v in doc.versions if v.version_number == version_number), None
             )
-            if version is None:
+            if found is None:
                 raise NotFoundError(
                     f"Version {version_number} does not exist for document {document_id}."
                 )
+            version = found
         return (
             version.file_data,
             version.content_type,

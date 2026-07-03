@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -50,23 +50,23 @@ def test_list_filters_by_folder(session):
     b = _seed_chat(session, "B", folder_id="folder-1")
     svc = _make_service(session)
 
-    titles_no_filter = sorted(c["title"] for c in svc.list())
+    titles_no_filter = sorted(c["title"] for c in svc.list_chats())
     assert titles_no_filter == ["A", "B"]
 
-    only_b = svc.list(folder_id="folder-1")
+    only_b = svc.list_chats(folder_id="folder-1")
     assert [c["id"] for c in only_b] == [b.id]
     assert a.id not in [c["id"] for c in only_b]
 
 
 def test_list_returns_newest_chat_first(session):
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
     oldest = Chat(title="oldest", created_at=base)
     middle = Chat(title="middle", created_at=base + timedelta(minutes=5))
     newest = Chat(title="newest", created_at=base + timedelta(minutes=10))
     session.add_all([oldest, middle, newest])
     session.commit()
 
-    titles = [c["title"] for c in _make_service(session).list()]
+    titles = [c["title"] for c in _make_service(session).list_chats()]
     assert titles == ["newest", "middle", "oldest"]
 
 

@@ -5,8 +5,8 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from src.exceptions import DomainError
 from src.auth import require_user
+from src.exceptions import DomainError
 from src.interfaces.chat_service import IChatService
 from src.models.user import User
 from src.schemas.chat import ChatDetailOut, ChatOut, ChatUpdate, MessageCreate
@@ -35,7 +35,7 @@ async def list_chats(
     chat_service: IChatService = Depends(get_chat_service),
 ):
     return await asyncio.to_thread(
-        chat_service.list, _clean_optional(folder_id), current_user.id
+        chat_service.list_chats, _clean_optional(folder_id), current_user.id
     )
 
 

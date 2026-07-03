@@ -1,4 +1,4 @@
-from typing import Generator
+from collections.abc import Generator
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv

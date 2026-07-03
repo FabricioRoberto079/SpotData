@@ -19,7 +19,7 @@ class IVectorIndexService(ABC):
         content_type: str,
         chunks: list[str],
         embeddings: list[list[float]],
-        pages_per_chunk: list[int | None] | None = None,
+        pages_per_chunk: list[int] | None = None,
         category_id: str | None = None,
     ) -> int: ...
 

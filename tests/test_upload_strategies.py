@@ -4,11 +4,10 @@ import io
 import pytest
 from fastapi import UploadFile
 
-from src.exceptions import ValidationError
-
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.enums.upload_kind import UploadKind
+from src.exceptions import ValidationError
 from src.services.upload_strategies import (
     FileUploadStrategy,
     ImageUploadStrategy,
@@ -97,7 +96,7 @@ def test_text_strategy_encodes_and_defaults_name():
             file=None, text="  some content  ", file_name=None
         )
     )
-    assert payload.file_data == "some content".encode("utf-8")
+    assert payload.file_data == b"some content"
     assert payload.content_type == ContentType.TEXTO
     assert payload.category == DocumentCategory.TEXT
     assert payload.file_name == "plain-text"

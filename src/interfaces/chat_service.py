@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 
 class IChatService(ABC):
     @abstractmethod
-    def list(
+    def list_chats(
         self, folder_id: str | None = None, user_id: str | None = None
     ) -> list[dict]: ...
 
@@ -21,8 +21,12 @@ class IChatService(ABC):
     @abstractmethod
     def delete(self, chat_id: str, user_id: str | None = None) -> None: ...
 
+    # Declared without `async` on purpose: the concrete implementation is an
+    # async generator. Typing an abstract async generator as a plain method that
+    # returns AsyncIterator is the pattern mypy expects (otherwise it reads the
+    # return as Coroutine[..., AsyncIterator] and callers can't `async for`).
     @abstractmethod
-    async def ask_stream(
+    def ask_stream(
         self,
         question: str,
         chat_id: str | None = None,

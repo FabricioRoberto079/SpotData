@@ -75,9 +75,7 @@ class WordExtractor(IContentExtractor):
             if tag == _TAG_P:
                 for elem in block.iter():
                     et = elem.tag
-                    if et == _TAG_LRPB:
-                        new_page()
-                    elif et == _TAG_BR and elem.get(_ATTR_TYPE) == "page":
+                    if et == _TAG_LRPB or et == _TAG_BR and elem.get(_ATTR_TYPE) == "page":
                         new_page()
                     elif et == _TAG_T:
                         emit(elem.text or "")

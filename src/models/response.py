@@ -1,8 +1,14 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.enums.response_status import ResponseStatus
 from src.models.base_model import BaseModel
+
+if TYPE_CHECKING:
+    from src.models.evidence_citation import EvidenceCitation
+    from src.models.query import Query
 
 
 class Response(BaseModel):

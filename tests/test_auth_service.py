@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -125,7 +125,7 @@ def test_reset_password_expired_code_raises(session):
     code = _extract_code(sender.sent[0]["body"])
 
     stored = session.scalars(select(PasswordResetCode)).one()
-    stored.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=1)
     session.commit()
 
     with pytest.raises(UnauthorizedError):

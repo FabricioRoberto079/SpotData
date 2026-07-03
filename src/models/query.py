@@ -1,7 +1,14 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base_model import BaseModel
+
+if TYPE_CHECKING:
+    from src.models.chat import Chat
+    from src.models.response import Response
+    from src.models.user import User
 
 
 class Query(BaseModel):

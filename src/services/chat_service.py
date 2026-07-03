@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -86,7 +87,7 @@ class ChatService(IChatService):
             raise NotFoundError(f"Chat not found: {chat_id}")
         return chat
 
-    def list(
+    def list_chats(
         self, folder_id: str | None = None, user_id: str | None = None
     ) -> list[dict]:
         stmt = select(Chat)
@@ -169,7 +170,7 @@ class ChatService(IChatService):
     @staticmethod
     def _serialize_citation_with_doc(
         citation: EvidenceCitation,
-        doc: "KnowledgeDocument | None",
+        doc: KnowledgeDocument | None,
     ) -> dict:
         version = None
         if doc is not None and citation.document_version_id is not None:
@@ -218,7 +219,7 @@ class ChatService(IChatService):
 
     def _resolve_version(
         self, document_id: str, version_number: int | None
-    ) -> "DocumentVersion | None":
+    ) -> DocumentVersion | None:
         doc = self._session.get(KnowledgeDocument, document_id)
         if doc is None or not doc.versions:
             return None
@@ -232,7 +233,7 @@ class ChatService(IChatService):
     def _serialize_citation(
         self,
         citation: EvidenceCitation,
-        version: "DocumentVersion | None" = None,
+        version: DocumentVersion | None = None,
     ) -> dict:
         doc = self._session.get(KnowledgeDocument, citation.document_id)
         if version is None and citation.document_version_id is not None:
@@ -372,9 +373,7 @@ class ChatService(IChatService):
         answer = (payload.get("answer") or "").strip()
         if not answer:
             return False
-        if not payload.get("citations"):
-            return False
-        return True
+        return bool(payload.get("citations"))
 
     @staticmethod
     def _build_stream_cache_payload(

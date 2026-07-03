@@ -34,7 +34,7 @@ def test_unsupported_type_raises_validation_error():
 def test_plain_text_extractor_decodes_utf8():
     from src.services.extractors.plain_text import PlainTextExtractor
 
-    assert PlainTextExtractor().from_bytes("olá".encode("utf-8")) == "olá"
+    assert PlainTextExtractor().from_bytes("olá".encode()) == "olá"
 
 
 def test_word_extractor_splits_docx_on_manual_page_break():

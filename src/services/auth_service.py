@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends
 from sqlalchemy import delete, select
@@ -47,7 +47,7 @@ def _reset_email_body(name: str, code: str) -> str:
 
 def _as_utc(value: datetime) -> datetime:
     """SQLite returns naive datetimes; normalize to aware UTC for comparison."""
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class AuthService(IAuthService):
@@ -102,7 +102,7 @@ class AuthService(IAuthService):
             return
 
         code = generate_reset_code()
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=_CODE_TTL_MINUTES)
+        expires_at = datetime.now(UTC) + timedelta(minutes=_CODE_TTL_MINUTES)
         try:
             # Drop any previous unused codes so only the newest one is valid.
             self._session.execute(
@@ -157,7 +157,7 @@ class AuthService(IAuthService):
         if user is None or record is None:
             raise invalid
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if _as_utc(record.expires_at) < now or record.attempts >= _MAX_ATTEMPTS:
             raise invalid
 
