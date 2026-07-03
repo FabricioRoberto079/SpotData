@@ -4,11 +4,11 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response
 
+from src.auth import require_role, require_user
 from src.enums.content_type import ContentType
 from src.enums.upload_kind import UploadKind
 from src.enums.user_role import UserRole
 from src.exceptions import ValidationError
-from src.auth import require_role
 from src.interfaces.document_service import IDocumentService
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.user import User
@@ -17,7 +17,14 @@ from src.services.document_service import get_document_service
 from src.services.upload_strategies import get_upload_strategy
 from src.services.vector_index_service import get_vector_index_service
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+# Every document endpoint requires a valid JWT. Listing, search, metadata and
+# downloads are readable by any authenticated user; writes are gated per-endpoint
+# with require_role below.
+router = APIRouter(
+    prefix="/documents",
+    tags=["documents"],
+    dependencies=[Depends(require_user)],
+)
 
 _CONTENT_TYPE_TO_MIME = {
     ContentType.PDF.value: "application/pdf",
@@ -93,8 +100,8 @@ async def upload_document(
 ):
     try:
         strategy = get_upload_strategy(kind)
-    except KeyError:
-        raise ValidationError(f"Unknown upload kind: '{kind}'.")
+    except KeyError as exc:
+        raise ValidationError(f"Unknown upload kind: '{kind}'.") from exc
 
     payload = await strategy.build_payload(file=file, text=text, file_name=file_name)
 
@@ -144,6 +151,7 @@ async def get_document_metadata(
 @router.delete("/{document_id}")
 async def delete_document_endpoint(
     document_id: str,
+    _user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
     document_service: IDocumentService = Depends(get_document_service),
 ):
     document_service.delete_document(document_id)

@@ -23,7 +23,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     status_code=201,
     summary="Register a user and return its data",
 )
+@limiter.limit("5/minute")
 async def register(
+    request: Request,
     payload: RegisterRequest,
     auth_service: IAuthService = Depends(get_auth_service),
 ):

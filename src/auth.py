@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -47,7 +47,7 @@ def generate_reset_code() -> str:
 def issue_token(user: User) -> tuple[str, int]:
     secret = required_env("JWT_SECRET")
     minutes = required_int("JWT_EXPIRATION_MINUTES")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = now + timedelta(minutes=minutes)
     payload = {
         "sub": user.id,
@@ -60,27 +60,24 @@ def issue_token(user: User) -> tuple[str, int]:
     return token, minutes * 60
 
 
-def _decode_token(token: str) -> dict:
+def decode_token(token: str) -> dict:
+    """Decode and verify a JWT. Raises AuthError on any failure. Shared by the
+    HTTP and MCP auth paths so claim/algorithm handling never diverges."""
     secret = required_env("JWT_SECRET")
     algorithm = required_env("JWT_ALGORITHM")
     try:
         return jwt.decode(token, secret, algorithms=[algorithm])
-    except jwt.ExpiredSignatureError:
-        raise AuthError("Token expired.")
-    except jwt.InvalidTokenError as e:
-        raise AuthError(f"Invalid token: {e}")
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthError("Token expired.") from exc
+    except jwt.InvalidTokenError as exc:
+        raise AuthError(f"Invalid token: {exc}") from exc
 
 
-def authenticate_request(request: Request) -> User:
-    """Validate the Bearer JWT and return the authenticated User. Raises AuthError otherwise."""
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        raise AuthError("Authorization header missing or malformed.")
-    token = auth_header[7:].strip()
-    if not token:
-        raise AuthError("Empty token.")
-
-    payload = _decode_token(token)
+def authenticate_token(token: str) -> User:
+    """Validate a JWT string and return the live User, re-checking existence and
+    `is_active` against the database on every call. Raises AuthError otherwise.
+    Used by both the HTTP dependency and the MCP transport."""
+    payload = decode_token(token)
     user_id = payload.get("sub")
     if not user_id:
         raise AuthError("Token has no subject.")
@@ -96,6 +93,17 @@ def authenticate_request(request: Request) -> User:
         return user
     finally:
         session.close()
+
+
+def authenticate_request(request: Request) -> User:
+    """Validate the Bearer JWT and return the authenticated User. Raises AuthError otherwise."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise AuthError("Authorization header missing or malformed.")
+    token = auth_header[7:].strip()
+    if not token:
+        raise AuthError("Empty token.")
+    return authenticate_token(token)
 
 
 def require_user(current_user: User = Depends(authenticate_request)) -> User:
