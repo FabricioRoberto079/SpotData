@@ -17,6 +17,7 @@ from src.models.knowledge_document import KnowledgeDocument  # noqa: F401
 from src.models.qa_cache_entry import QaCacheEntry  # noqa: F401
 from src.models.query import Query  # noqa: F401
 from src.models.response import Response  # noqa: F401
+from src.models.upload_session import UploadSession  # noqa: F401
 from src.models.user import User  # noqa: F401
 from src.models.vector_chunk import VectorChunk  # noqa: F401
 

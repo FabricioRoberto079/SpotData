@@ -38,3 +38,39 @@ def test_delete_document_requires_auth():
 
 def test_upload_requires_auth():
     assert client.post("/documents/upload", data={"kind": "text"}).status_code == 401
+
+
+def test_upload_batch_requires_auth():
+    assert client.post("/documents/upload/batch").status_code == 401
+
+
+def test_create_upload_session_requires_auth():
+    assert (
+        client.post(
+            "/documents/upload-sessions",
+            json={"file_name": "a.txt", "total_size": 1},
+        ).status_code
+        == 401
+    )
+
+
+def test_get_upload_session_requires_auth():
+    assert client.get("/documents/upload-sessions/some-id").status_code == 401
+
+
+def test_upload_chunk_requires_auth():
+    assert client.put("/documents/upload-sessions/some-id/chunk").status_code == 401
+
+
+def test_pause_upload_session_requires_auth():
+    assert client.post("/documents/upload-sessions/some-id/pause").status_code == 401
+
+
+def test_complete_upload_session_requires_auth():
+    assert (
+        client.post("/documents/upload-sessions/some-id/complete").status_code == 401
+    )
+
+
+def test_abort_upload_session_requires_auth():
+    assert client.delete("/documents/upload-sessions/some-id").status_code == 401

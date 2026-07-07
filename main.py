@@ -27,6 +27,7 @@ from src.controllers.categories_controller import router as categories_router
 from src.controllers.chat_controller import router as chat_router
 from src.controllers.document_controller import router as document_router
 from src.controllers.folder_controller import chat_folder_router
+from src.controllers.upload_session_controller import router as upload_session_router
 from src.exceptions import DomainError
 from src.integrations.llm import LlmError
 from src.logging_config import setup_logging
@@ -107,6 +108,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(categories_router)
 app.include_router(document_router)
+app.include_router(upload_session_router)
 app.include_router(chat_folder_router)
 app.include_router(chat_router)
 
