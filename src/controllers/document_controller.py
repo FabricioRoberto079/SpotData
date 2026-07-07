@@ -8,13 +8,14 @@ from src.auth import require_role, require_user
 from src.enums.content_type import ContentType
 from src.enums.upload_kind import UploadKind
 from src.enums.user_role import UserRole
-from src.exceptions import ValidationError
+from src.exceptions import DomainError, ValidationError
 from src.interfaces.document_service import IDocumentService
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.user import User
 from src.schemas.document import DocumentList, DocumentOut, SearchResults
 from src.services.document_service import get_document_service
 from src.services.upload_strategies import get_upload_strategy
+from src.services.upload_strategies._shared import IMAGE_EXTENSIONS, extract_ext
 from src.services.vector_index_service import get_vector_index_service
 
 # Every document endpoint requires a valid JWT. Listing, search, metadata and
@@ -116,6 +117,79 @@ async def upload_document(
         category_id,
     )
     return {"message": _upload_message(result), **result}
+
+
+_MAX_BATCH_FILES = 20
+
+
+def _infer_kind(filename: str) -> UploadKind:
+    if extract_ext(filename) in IMAGE_EXTENSIONS:
+        return UploadKind.IMAGE
+    return UploadKind.FILE
+
+
+@router.post(
+    "/upload/batch",
+    summary="Upload several files at once",
+    description=(
+        "Send up to 20 files in one request; the kind of each one is inferred "
+        "from its extension (images vs documents). Files are processed "
+        "independently: one invalid file doesn't fail the batch — its error is "
+        "reported in the matching `items` entry. Optional `category_id` "
+        "applies to every file. Viewers cannot upload."
+    ),
+)
+async def upload_documents_batch(
+    files: list[UploadFile] = File(...),
+    category_id: str | None = Form(
+        default=None, description="Optional target category id for every file."
+    ),
+    current_user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
+    document_service: IDocumentService = Depends(get_document_service),
+):
+    if not files:
+        raise ValidationError("No files sent.")
+    if len(files) > _MAX_BATCH_FILES:
+        raise ValidationError(
+            f"Too many files: {len(files)}. Send at most {_MAX_BATCH_FILES} per batch."
+        )
+
+    items: list[dict] = []
+    for file in files:
+        try:
+            strategy = get_upload_strategy(_infer_kind(file.filename or ""))
+            payload = await strategy.build_payload(
+                file=file, text=None, file_name=None
+            )
+            result = await asyncio.to_thread(
+                document_service.upload_new_document,
+                payload.file_data,
+                payload.content_type,
+                payload.file_name,
+                payload.category,
+                current_user.id,
+                category_id,
+            )
+            items.append(
+                {
+                    "file_name": payload.file_name,
+                    "ok": True,
+                    "message": _upload_message(result),
+                    **result,
+                }
+            )
+        except DomainError as exc:
+            items.append(
+                {"file_name": file.filename, "ok": False, "error": exc.message}
+            )
+
+    succeeded = sum(1 for item in items if item["ok"])
+    return {
+        "items": items,
+        "total": len(items),
+        "succeeded": succeeded,
+        "failed": len(items) - succeeded,
+    }
 
 
 @router.get(

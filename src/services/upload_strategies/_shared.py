@@ -1,9 +1,28 @@
 import magic
 from fastapi import UploadFile
 
+from src.enums.content_type import ContentType
+from src.enums.document_category import DocumentCategory
 from src.exceptions import ValidationError
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
+
+# Extension -> (ContentType, DocumentCategory), single source of truth shared by
+# the upload strategies, the batch endpoint and resumable upload sessions.
+FILE_EXTENSION_MAP: dict[str, tuple[ContentType, DocumentCategory]] = {
+    ".pdf": (ContentType.PDF, DocumentCategory.DOCUMENTS),
+    ".doc": (ContentType.DOC, DocumentCategory.DOCUMENTS),
+    ".docx": (ContentType.DOC, DocumentCategory.DOCUMENTS),
+    ".txt": (ContentType.TEXTO, DocumentCategory.TEXT),
+    ".md": (ContentType.TEXTO, DocumentCategory.TEXT),
+}
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+DOCUMENT_EXTENSION_MAP: dict[str, tuple[ContentType, DocumentCategory]] = {
+    **FILE_EXTENSION_MAP,
+    **dict.fromkeys(IMAGE_EXTENSIONS, (ContentType.FOTO, DocumentCategory.IMAGES)),
+}
 
 # Allowed MIME types per declared extension. python-magic inspects the actual bytes,
 # so renaming a `malware.exe` to `report.pdf` will be caught here.
