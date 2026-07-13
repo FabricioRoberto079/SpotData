@@ -17,9 +17,7 @@ class RegisterEvidence(BaseModel):
             "exactly as shown in the entry's [index=N ...] header."
         )
     )
-    confidence: float = Field(
-        description="Confidence in this citation in the range 0.0–1.0."
-    )
+    confidence: float = Field(description="Confidence in this citation in the range 0.0–1.0.")
 
 
 class RagAnswer(BaseModel):
@@ -132,15 +130,14 @@ def _build_user_content(question: str, contexts: list[dict]) -> str:
         )
     else:
         context_block = "(empty)"
-    return (
-        f"TODAY: {today}\n\n"
-        f"CONTEXT:\n{context_block}\n\n"
-        f"QUESTION: {question}"
-    )
+    return f"TODAY: {today}\n\nCONTEXT:\n{context_block}\n\nQUESTION: {question}"
 
 
-def build_messages(question: str, contexts: list[dict]) -> list[dict]:
+def build_messages(
+    question: str, contexts: list[dict], history: list[dict] | None = None
+) -> list[dict]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *(history or []),
         {"role": "user", "content": _build_user_content(question, contexts)},
     ]

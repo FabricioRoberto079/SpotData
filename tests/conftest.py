@@ -1,16 +1,30 @@
+"""Session-wide test environment, applied before any application import.
+
+Forces hermetic settings (4-dim embeddings, throwaway JWT secret) and points
+POSTGRES_DB at a disposable `*_test` database, so no pytest run can ever touch
+the real development database even if a test accidentally opens a connection.
+"""
+
 import os
+
+from dotenv import load_dotenv
+
+os.environ["EMBEDDING_DIMENSION"] = "4"
+os.environ.setdefault("JWT_SECRET", "test-secret")
+load_dotenv()
+_db = os.getenv("POSTGRES_DB")
+if _db and not _db.endswith("_test"):
+    os.environ["POSTGRES_DB"] = f"{_db}_test"
 
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-os.environ.setdefault("JWT_SECRET", "test-secret")
-os.environ.setdefault("EMBEDDING_DIMENSION", "4")
-
 from src.integrations.llm import LlmClient
 from src.interfaces.qa_cache import IQaCache, question_key
 from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.base_model import Base
+from src.prompts.condense_prompt import CondensedQuery
 
 
 def make_structured_partials(
@@ -45,8 +59,6 @@ def make_structured_partials(
 def engine():
     eng = create_engine("sqlite:///:memory:")
 
-    # SQLite disables FK enforcement by default; enable it so cascade gaps
-    # surface in tests instead of silently passing.
     @event.listens_for(eng, "connect")
     def _enable_sqlite_fk(dbapi_conn, _):
         cursor = dbapi_conn.cursor()
@@ -62,8 +74,8 @@ def engine():
 
 @pytest.fixture
 def session(engine):
-    SessionMaker = sessionmaker(bind=engine)
-    s = SessionMaker()
+    session_factory = sessionmaker(bind=engine)
+    s = session_factory()
     try:
         yield s
     finally:
@@ -75,16 +87,24 @@ class FakeLlm(LlmClient):
         self,
         structured_partials: list[dict] | None = None,
         stream_error: Exception | None = None,
+        condense_result: str | None = None,
     ) -> None:
         self.structured_partials = structured_partials
         self.stream_error = stream_error
+        self.condense_result = condense_result
         self.embed_calls: list[list[str]] = []
+        self.structured_schemas: list = []
 
     async def chat_stream_structured(
         self, messages, schema, model=None, temperature=0.0, max_tokens=None
     ):
+        self.structured_schemas.append(schema)
         if self.stream_error is not None:
             raise self.stream_error
+        if schema is CondensedQuery:
+            if self.condense_result is not None:
+                yield {"standalone_question": self.condense_result}
+            return
         for partial in self.structured_partials or []:
             yield partial
 
@@ -102,6 +122,7 @@ class StubVectorIndex(IVectorIndexService):
     def __init__(self, results=None) -> None:
         self._results = results or []
         self.last_commit: dict | None = None
+        self.last_query: str | None = None
 
     def prepare(self, text):
         return ([text], [[0.0] * 4])
@@ -144,6 +165,7 @@ class StubVectorIndex(IVectorIndexService):
         pass
 
     def search(self, query, n_results=5, embedding=None, category_id=None):
+        self.last_query = query
         self.last_search_scope = category_id
         return self._results
 
