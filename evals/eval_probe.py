@@ -12,7 +12,7 @@ from src.services.vector_index_service import VectorIndexService
 
 PROBES = [
     "Qual a velocidade da luz no vácuo?",
-    "Quem foi Alan Turing?",            # nome que pode aparecer no livro de SO
+    "Quem foi Alan Turing?",
     "Qual a fórmula química da água?",
 ]
 

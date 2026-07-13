@@ -10,9 +10,6 @@ from src.schemas.upload_session import UploadSessionCreate, UploadSessionOut
 from src.services.upload_session_service import get_upload_session_service
 from src.services.upload_strategies._shared import read_upload
 
-# Resumable uploads: open a session, PUT sequential chunks (pause/resume at
-# will), then complete to run the ingestion pipeline. Same write gate as the
-# regular upload endpoint: viewers cannot upload.
 router = APIRouter(
     prefix="/documents/upload-sessions",
     tags=["documents"],
@@ -74,9 +71,7 @@ async def upload_chunk(
     service: IUploadSessionService = Depends(get_upload_session_service),
 ):
     data = await read_upload(chunk)
-    return await asyncio.to_thread(
-        service.append_chunk, session_id, current_user.id, offset, data
-    )
+    return await asyncio.to_thread(service.append_chunk, session_id, current_user.id, offset, data)
 
 
 @router.post(
@@ -106,7 +101,6 @@ async def complete_upload_session(
     current_user: User = _EDITOR_OR_ADMIN,
     service: IUploadSessionService = Depends(get_upload_session_service),
 ):
-    # Heavy CPU work (extraction, embeddings) — keep the event loop free.
     result = await asyncio.to_thread(service.complete, session_id, current_user.id)
     return {"message": "Upload completed and document ingested.", **result}
 

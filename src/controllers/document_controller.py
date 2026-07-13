@@ -18,9 +18,6 @@ from src.services.upload_strategies import get_upload_strategy
 from src.services.upload_strategies._shared import IMAGE_EXTENSIONS, extract_ext
 from src.services.vector_index_service import get_vector_index_service
 
-# Every document endpoint requires a valid JWT. Listing, search, metadata and
-# downloads are readable by any authenticated user; writes are gated per-endpoint
-# with require_role below.
 router = APIRouter(
     prefix="/documents",
     tags=["documents"],
@@ -29,8 +26,8 @@ router = APIRouter(
 
 _CONTENT_TYPE_TO_MIME = {
     ContentType.PDF.value: "application/pdf",
-    ContentType.TEXTO.value: "text/plain; charset=utf-8",
-    ContentType.FOTO.value: "application/octet-stream",
+    ContentType.TEXT.value: "text/plain; charset=utf-8",
+    ContentType.IMAGE.value: "application/octet-stream",
     ContentType.DOC.value: "application/octet-stream",
 }
 
@@ -46,7 +43,7 @@ def _content_disposition(file_name: str) -> str:
     """RFC 5987 / 6266 quoting: prevents CRLF / quote injection in filename."""
     ascii_fallback = file_name.encode("ascii", "replace").decode("ascii").replace('"', "")
     encoded = quote(file_name, safe="")
-    return f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
+    return f"inline; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _file_response(
@@ -106,7 +103,6 @@ async def upload_document(
 
     payload = await strategy.build_payload(file=file, text=text, file_name=file_name)
 
-    # Heavy CPU work (extraction, embeddings, vector upsert) — keep the event loop free.
     result = await asyncio.to_thread(
         document_service.upload_new_document,
         payload.file_data,
@@ -158,9 +154,7 @@ async def upload_documents_batch(
     for file in files:
         try:
             strategy = get_upload_strategy(_infer_kind(file.filename or ""))
-            payload = await strategy.build_payload(
-                file=file, text=None, file_name=None
-            )
+            payload = await strategy.build_payload(file=file, text=None, file_name=None)
             result = await asyncio.to_thread(
                 document_service.upload_new_document,
                 payload.file_data,
@@ -179,9 +173,7 @@ async def upload_documents_batch(
                 }
             )
         except DomainError as exc:
-            items.append(
-                {"file_name": file.filename, "ok": False, "error": exc.message}
-            )
+            items.append({"file_name": file.filename, "ok": False, "error": exc.message})
 
     succeeded = sum(1 for item in items if item["ok"])
     return {
@@ -208,9 +200,7 @@ async def search_documents(
 ):
     if not q.strip():
         raise ValidationError("Empty query.")
-    results = await asyncio.to_thread(
-        vector_index.search, q, n_results, None, category_id
-    )
+    results = await asyncio.to_thread(vector_index.search, q, n_results, None, category_id)
     return {"query": q, "results": results}
 
 
@@ -237,9 +227,7 @@ async def download_latest(
     document_id: str,
     document_service: IDocumentService = Depends(get_document_service),
 ):
-    return _file_response(
-        *document_service.get_version_file(document_id, version_number=None)
-    )
+    return _file_response(*document_service.get_version_file(document_id, version_number=None))
 
 
 @router.get("/{document_id}/versions/{version_number}/download")
@@ -249,7 +237,5 @@ async def download_version(
     document_service: IDocumentService = Depends(get_document_service),
 ):
     return _file_response(
-        *document_service.get_version_file(
-            document_id, version_number=version_number
-        )
+        *document_service.get_version_file(document_id, version_number=version_number)
     )

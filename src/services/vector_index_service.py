@@ -50,9 +50,7 @@ class VectorIndexService(IVectorIndexService):
             )
         return chunks, embeddings
 
-    def prepare_paged(
-        self, pages: list[str]
-    ) -> tuple[list[str], list[list[float]], list[int]]:
+    def prepare_paged(self, pages: list[str]) -> tuple[list[str], list[list[float]], list[int]]:
         chunks: list[str] = []
         pages_per_chunk: list[int] = []
         for page_no, page_text in enumerate(pages, start=1):
@@ -128,9 +126,7 @@ class VectorIndexService(IVectorIndexService):
         )
 
     def purge_document(self, document_id: str) -> None:
-        self._session.execute(
-            delete(VectorChunk).where(VectorChunk.document_id == document_id)
-        )
+        self._session.execute(delete(VectorChunk).where(VectorChunk.document_id == document_id))
 
     def search(
         self,
@@ -173,11 +169,11 @@ class VectorIndexService(IVectorIndexService):
     ) -> list[dict]:
         distance = VectorChunk.embedding.cosine_distance(embedding)
         stmt = self._scope(self._search_select(distance), category_id)
-        rows = self._session.execute(
-            stmt.order_by(distance.asc()).limit(n_results)
-        ).all()
-        return [self._row_to_dict(chunk, float(dist), doc_name, created_at)
-                for chunk, dist, doc_name, created_at in rows]
+        rows = self._session.execute(stmt.order_by(distance.asc()).limit(n_results)).all()
+        return [
+            self._row_to_dict(chunk, float(dist), doc_name, created_at)
+            for chunk, dist, doc_name, created_at in rows
+        ]
 
     def _search_hybrid(
         self,
@@ -230,11 +226,8 @@ class VectorIndexService(IVectorIndexService):
 
         top_ids = sorted(rrf_scores, key=lambda i: -rrf_scores[i])[:n_results]
 
-        rows = self._session.execute(
-            self._search_select().where(VectorChunk.id.in_(top_ids))
-        ).all()
-        by_id = {chunk.id: (chunk, doc_name, created_at)
-                 for chunk, doc_name, created_at in rows}
+        rows = self._session.execute(self._search_select().where(VectorChunk.id.in_(top_ids))).all()
+        by_id = {chunk.id: (chunk, doc_name, created_at) for chunk, doc_name, created_at in rows}
 
         return [
             self._row_to_dict(

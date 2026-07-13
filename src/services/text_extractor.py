@@ -9,13 +9,11 @@ from src.services.extractors.word import WordExtractor
 
 
 class TextExtractor(ITextExtractor):
-    def __init__(
-        self, registry: dict[ContentType, IContentExtractor] | None = None
-    ) -> None:
+    def __init__(self, registry: dict[ContentType, IContentExtractor] | None = None) -> None:
         self._registry = registry or {
-            ContentType.TEXTO: PlainTextExtractor(),
+            ContentType.TEXT: PlainTextExtractor(),
             ContentType.PDF: PdfExtractor(),
-            ContentType.FOTO: ImageExtractor(),
+            ContentType.IMAGE: ImageExtractor(),
             ContentType.DOC: WordExtractor(),
         }
 
@@ -28,9 +26,7 @@ class TextExtractor(ITextExtractor):
     def extract_from_bytes(self, data: bytes, content_type: ContentType) -> str:
         return self._resolve(content_type).from_bytes(data)
 
-    def extract_pages_from_bytes(
-        self, data: bytes, content_type: ContentType
-    ) -> list[str] | None:
+    def extract_pages_from_bytes(self, data: bytes, content_type: ContentType) -> list[str] | None:
         return self._resolve(content_type).pages_from_bytes(data)
 
 

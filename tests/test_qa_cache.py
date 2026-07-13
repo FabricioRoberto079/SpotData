@@ -10,9 +10,7 @@ def _make(monkeypatch, l1_max_entries: int = 4):
         def __exit__(self, *args):
             return False
 
-    monkeypatch.setattr(
-        "src.services.qa_cache.SessionLocal", lambda: _NoSession()
-    )
+    monkeypatch.setattr("src.services.qa_cache.SessionLocal", lambda: _NoSession())
     return HybridQaCache(l1_max_entries=l1_max_entries)
 
 
@@ -70,9 +68,7 @@ def test_semantic_lookup_degrades_gracefully_without_db(monkeypatch):
 def test_question_key_differs_by_scope_but_stable_within_one():
     assert question_key("q") != question_key("q", "cat-a")
     assert question_key("q", "cat-a") != question_key("q", "cat-b")
-    assert question_key("Qual é a meta?", "cat-a") == question_key(
-        "  qual é a META?  ", "cat-a"
-    )
+    assert question_key("Qual é a meta?", "cat-a") == question_key("  qual é a META?  ", "cat-a")
 
 
 def test_l1_lookup_is_isolated_by_scope(monkeypatch):
@@ -82,7 +78,6 @@ def test_l1_lookup_is_isolated_by_scope(monkeypatch):
 
     assert cache.lookup_exact("qual a meta?") == {"answer": "global"}
     assert cache.lookup_exact("qual a meta?", "cat-a") == {"answer": "cat-a"}
-    # A different category never reads another scope's answer.
     assert cache.lookup_exact("qual a meta?", "cat-b") is None
 
 
@@ -94,9 +89,9 @@ def test_invalidate_category_drops_scope_and_global_keeps_other_categories(monke
 
     cache.invalidate_category("cat-a")
 
-    assert cache.lookup_exact("q", "cat-a") is None  # changed category dropped
-    assert cache.lookup_exact("q") is None  # global may have drawn on it -> dropped
-    assert cache.lookup_exact("q", "cat-b") == {"answer": "b"}  # untouched
+    assert cache.lookup_exact("q", "cat-a") is None
+    assert cache.lookup_exact("q") is None
+    assert cache.lookup_exact("q", "cat-b") == {"answer": "b"}
 
 
 def test_invalidate_category_none_clears_everything(monkeypatch):
@@ -105,7 +100,6 @@ def test_invalidate_category_none_clears_everything(monkeypatch):
     cache.put("q", [0.1] * 4, {"answer": "a"}, "cat-a")
     gen0 = cache.stats()["generation"]
 
-    # A shared (uncategorized) document surfaces in every scope -> full wipe.
     cache.invalidate_category(None)
 
     assert cache.lookup_exact("q") is None

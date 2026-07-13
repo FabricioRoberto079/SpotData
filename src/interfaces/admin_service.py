@@ -4,7 +4,6 @@ from src.enums.user_role import UserRole
 
 
 class IAdminService(ABC):
-    # --- categories ---
     @abstractmethod
     def create_category(self, name: str, created_by: str | None = None) -> dict: ...
 
@@ -17,7 +16,6 @@ class IAdminService(ABC):
     @abstractmethod
     def delete_category(self, category_id: str) -> None: ...
 
-    # --- user management ---
     @abstractmethod
     def list_users(self) -> list[dict]: ...
 

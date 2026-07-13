@@ -19,9 +19,7 @@ async def create_folder(
     return folder_service.create(payload.name, payload.parent_id, current_user.id)
 
 
-@chat_folder_router.get(
-    "", response_model=list[FolderNode], summary="List chat folder tree"
-)
+@chat_folder_router.get("", response_model=list[FolderNode], summary="List chat folder tree")
 async def list_folders(
     current_user: User = Depends(require_user),
     folder_service: IFolderService = Depends(get_chat_folder_service),

@@ -14,17 +14,11 @@ class IChatService(ABC):
     def get(self, chat_id: str, user_id: str | None = None) -> dict: ...
 
     @abstractmethod
-    def update(
-        self, chat_id: str, fields: dict, user_id: str | None = None
-    ) -> dict: ...
+    def update(self, chat_id: str, fields: dict, user_id: str | None = None) -> dict: ...
 
     @abstractmethod
     def delete(self, chat_id: str, user_id: str | None = None) -> None: ...
 
-    # Declared without `async` on purpose: the concrete implementation is an
-    # async generator. Typing an abstract async generator as a plain method that
-    # returns AsyncIterator is the pattern mypy expects (otherwise it reads the
-    # return as Coroutine[..., AsyncIterator] and callers can't `async for`).
     @abstractmethod
     def ask_stream(
         self,

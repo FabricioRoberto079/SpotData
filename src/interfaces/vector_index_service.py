@@ -6,9 +6,7 @@ class IVectorIndexService(ABC):
     def prepare(self, text: str) -> tuple[list[str], list[list[float]]]: ...
 
     @abstractmethod
-    def prepare_paged(
-        self, pages: list[str]
-    ) -> tuple[list[str], list[list[float]], list[int]]: ...
+    def prepare_paged(self, pages: list[str]) -> tuple[list[str], list[list[float]], list[int]]: ...
 
     @abstractmethod
     def commit(

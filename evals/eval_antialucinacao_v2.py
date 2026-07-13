@@ -32,14 +32,12 @@ from src.services.chat_service import MIN_CITATION_CONFIDENCE, RAG_TOP_K
 from src.services.text_chunker import get_text_chunker
 from src.services.vector_index_service import VectorIndexService
 
-# --- IDs de categoria (do banco) ---
-GERAL = "00000000-0000-0000-0000-000000000001"   # SO (Tanenbaum), Conduta, Relatório
-AFONSO = "8ed541b0-2ea5-4b5b-b0d8-0783deb33a91"  # Porcentagem no cotidiano
-CSDCD = "be32988b-6574-4d06-bb92-2bfd26b610c1"   # (provável vazia)
+GERAL = "00000000-0000-0000-0000-000000000001"
+AFONSO = "8ed541b0-2ea5-4b5b-b0d8-0783deb33a91"
+CSDCD = "be32988b-6574-4d06-bb92-2bfd26b610c1"
 
 CAT_NAME = {GERAL: "GERAL", AFONSO: "AFONSO", CSDCD: "CSDCD(vazia?)", None: "TODAS"}
 
-# Perguntas por "categoria-casa" (onde a resposta realmente vive)
 OS_QUESTIONS = [
     "O que é um processo em um sistema operacional?",
     "O que é um deadlock (impasse)?",
@@ -53,7 +51,6 @@ PERCENT_QUESTIONS = [
     "Como calcular um desconto percentual em uma compra?",
 ]
 
-# Paráfrases da MESMA intenção (devem ter decisão consistente no escopo-casa)
 PARAPHRASES = {
     "O que é um processo (SO)": (GERAL, "ANSWER", [
         "O que é um processo em um sistema operacional?",
@@ -68,7 +65,6 @@ PARAPHRASES = {
     ]),
 }
 
-# Fora-da-base ampliado (escopo = todas as categorias). Esperado: RECUSA.
 OUT_OF_CORPUS = [
     "Qual é a capital da França?",
     "Quem escreveu Dom Casmurro?",
@@ -188,9 +184,7 @@ async def main():
         vix = VectorIndexService(session, get_text_chunker(), llm)
         runs = 0
 
-        # ---------- BLOCO A: matriz cross-categoria ----------
         print("=== BLOCO A — MESMA PERGUNTA, CONTEXTOS DIFERENTES ===")
-        # (escopo, decisão esperada) para perguntas cuja casa é GERAL
         os_scopes = [(GERAL, "ANSWER"), (AFONSO, "ABSTAIN"),
                      (CSDCD, "ABSTAIN"), (None, "ANSWER")]
         pct_scopes = [(AFONSO, "ANSWER"), (GERAL, "ABSTAIN"),
@@ -214,7 +208,6 @@ async def main():
                 f"{nm}:{'✓' if ok else '✗'}{dec[0]}" for nm, dec, exp, ok, g in line)
             print(f"  [{tag:>2}] {q[:42]:<42} | {cells}")
 
-        # ---------- BLOCO B: paráfrases ----------
         print("\n=== BLOCO B — ROBUSTEZ A PARÁFRASES (escopo-casa) ===")
         para = []
         for name, (cat, expected, variants) in PARAPHRASES.items():
@@ -232,7 +225,6 @@ async def main():
                   f"decisões={decs} consistente={'sim' if consistent else 'NÃO'} "
                   f"tudo-ok={'sim' if allok else 'NÃO'}")
 
-        # ---------- BLOCO C: fora-da-base ampliado ----------
         print("\n=== BLOCO C — FORA-DA-BASE AMPLIADO (escopo=TODAS) ===")
         ooc = []
         for q in OUT_OF_CORPUS:
@@ -242,7 +234,6 @@ async def main():
             ooc.append({"q": q, "decision": r["decision"]})
             print(f"  {'✓recusa' if r['decision']=='ABSTAIN' else '✗RESPONDEU':>10}  {q[:55]}")
 
-        # ---------- MÉTRICAS ----------
         def pct(a, b):
             return f"{100.0*a/b:.0f}%" if b else "n/a"
 

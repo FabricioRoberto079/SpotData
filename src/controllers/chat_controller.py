@@ -59,8 +59,6 @@ async def send_message(
         category_id=payload.category_id,
     )
 
-    # Force first event so early errors surface as proper HTTP responses
-    # before StreamingResponse opens the chunked body.
     try:
         first_event = await event_gen.__anext__()
     except StopAsyncIteration:
@@ -137,9 +135,7 @@ async def update_chat(
         update_data["folder_id"] = _clean_optional(update_data["folder_id"])
     if "title" in update_data:
         update_data["title"] = _clean_optional(update_data["title"])
-    return await asyncio.to_thread(
-        chat_service.update, chat_id, update_data, current_user.id
-    )
+    return await asyncio.to_thread(chat_service.update, chat_id, update_data, current_user.id)
 
 
 @router.delete("/{chat_id}", response_model=MessageResponse, summary="Delete a chat")

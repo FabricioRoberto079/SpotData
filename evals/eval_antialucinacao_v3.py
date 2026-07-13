@@ -28,9 +28,8 @@ from src.services.chat_service import MIN_CITATION_CONFIDENCE, RAG_TOP_K
 from src.services.text_chunker import get_text_chunker
 from src.services.vector_index_service import VectorIndexService
 
-REPS = 3  # repetições por pergunta (mede estabilidade)
+REPS = 3
 
-# Núcleo: conceitos centrais de SO — deve RESPONDER e ser fiel.
 CORE = [
     "O que é um processo em um sistema operacional?",
     "O que é um deadlock (impasse)?",
@@ -41,8 +40,6 @@ CORE = [
     "Para que serve um sistema de arquivos?",
     "O que é um semáforo em sistemas operacionais?",
 ]
-# Adjacente-difícil: termos que APARECEM no livro, mas resposta não coberta.
-# Aqui medimos alucinação por síntese. Esperado IDEAL: recusar OU responder fiel.
 ADJACENT = [
     "Quem foi Alan Turing?",
     "Quem criou o CERT?",
@@ -53,7 +50,6 @@ ADJACENT = [
     "Qual a biografia de Linus Torvalds?",
     "Quem inventou o sistema operacional UNIX e em que ano?",
 ]
-# Fora-da-base: sem relação com o corpus. Esperado: RECUSAR.
 OUT = [
     "Qual é a capital da França?",
     "Quem escreveu Dom Casmurro?",
@@ -158,7 +154,6 @@ async def main():
                 gtxt = "" if not g else f" grounded={['ok' if x else 'NÃO' for x in g]}"
                 print(f"  {q[:46]:<46} {Counter(d)} estável={'sim' if stable else 'NÃO'}{gtxt}")
 
-        # ---- métricas ----
         def pct(a, b):
             return f"{100.0*a/b:.0f}%" if b else "n/a"
 
@@ -175,7 +170,6 @@ async def main():
         adj_ans = sum(1 for r in adj if r["decision"] == "ANSWER")
         adj_grounded = sum(1 for r in adj if r["grounded"] is True)
 
-        # estabilidade por pergunta
         byq = {}
         for r in records:
             byq.setdefault(r["q"], []).append(r["decision"])

@@ -13,12 +13,8 @@ class ChatFolder(BaseModel):
     __tablename__ = "chat_folders"
 
     name: Mapped[str] = mapped_column(String, nullable=False)
-    parent_id: Mapped[str | None] = mapped_column(
-        ForeignKey("chat_folders.id"), nullable=True
-    )
-    owner_id: Mapped[str | None] = mapped_column(
-        ForeignKey("users.id"), nullable=True
-    )
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("chat_folders.id"), nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     parent: Mapped["ChatFolder | None"] = relationship(
         back_populates="children", remote_side="ChatFolder.id"

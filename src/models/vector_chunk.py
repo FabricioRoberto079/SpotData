@@ -32,9 +32,7 @@ class VectorChunk(BaseModel):
     document_id: Mapped[str] = mapped_column(
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False
     )
-    category_id: Mapped[str | None] = mapped_column(
-        ForeignKey("categories.id"), nullable=True
-    )
+    category_id: Mapped[str | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     is_latest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

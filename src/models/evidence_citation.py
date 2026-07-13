@@ -14,9 +14,7 @@ class EvidenceCitation(BaseModel):
     __tablename__ = "evidence_citations"
 
     response_id: Mapped[str] = mapped_column(ForeignKey("responses.id"), nullable=False)
-    document_id: Mapped[str] = mapped_column(
-        ForeignKey("knowledge_documents.id"), nullable=False
-    )
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"), nullable=False)
     document_version_id: Mapped[str | None] = mapped_column(
         ForeignKey("document_versions.id"), nullable=True
     )

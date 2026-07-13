@@ -62,7 +62,6 @@ async def forgot_password(
     auth_service: IAuthService = Depends(get_auth_service),
 ):
     auth_service.request_password_reset(email=payload.email)
-    # Same response whether or not the email exists, to avoid account enumeration.
     return {"detail": "If the email is registered, a reset code has been sent."}
 
 

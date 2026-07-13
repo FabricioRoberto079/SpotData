@@ -15,9 +15,7 @@ class Query(BaseModel):
     __tablename__ = "queries"
 
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    chat_id: Mapped[str | None] = mapped_column(
-        ForeignKey("chats.id"), nullable=True
-    )
+    chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id"), nullable=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_url: Mapped[str | None] = mapped_column(String, nullable=True)
     ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)

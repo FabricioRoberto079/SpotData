@@ -17,9 +17,6 @@ class QaCacheEntry(Base):
     )
 
     question_key: Mapped[str] = mapped_column(String, primary_key=True)
-    # Retrieval scope this answer was computed for; NULL = the global,
-    # search-everything chats. Lookups filter on it so a scoped chat never reads
-    # back another category's answer. The scope is also folded into question_key.
     category_id: Mapped[str | None] = mapped_column(
         ForeignKey("categories.id", ondelete="CASCADE"), nullable=True
     )

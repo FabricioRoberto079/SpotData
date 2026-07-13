@@ -14,13 +14,9 @@ from src.schemas.admin import (
 from src.schemas.system import MessageResponse
 from src.services.admin_service import get_admin_service
 
-# require_admin guards every route in this router.
-router = APIRouter(
-    prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)]
-)
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
-# --- categories ---
 @router.post("/categories", response_model=CategoryOut, summary="Create a category")
 async def create_category(
     payload: CategoryCreate,
@@ -30,9 +26,7 @@ async def create_category(
     return admin_service.create_category(payload.name, created_by=current_user.id)
 
 
-@router.get(
-    "/categories", response_model=list[CategoryOut], summary="List all categories"
-)
+@router.get("/categories", response_model=list[CategoryOut], summary="List all categories")
 async def list_categories(
     admin_service: IAdminService = Depends(get_admin_service),
 ):
@@ -49,9 +43,7 @@ async def update_category(
     payload: CategoryUpdate,
     admin_service: IAdminService = Depends(get_admin_service),
 ):
-    return admin_service.update_category(
-        category_id, payload.model_dump(exclude_unset=True)
-    )
+    return admin_service.update_category(category_id, payload.model_dump(exclude_unset=True))
 
 
 @router.delete(
@@ -67,7 +59,6 @@ async def delete_category(
     return {"message": "Category removed."}
 
 
-# --- users ---
 @router.get("/users", response_model=list[AdminUserOut], summary="List all users")
 async def list_users(
     admin_service: IAdminService = Depends(get_admin_service),

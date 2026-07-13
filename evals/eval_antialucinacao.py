@@ -25,12 +25,8 @@ from src.services.chat_service import MIN_CITATION_CONFIDENCE, RAG_TOP_K
 from src.services.text_chunker import get_text_chunker
 from src.services.vector_index_service import VectorIndexService
 
-# category_id=None => busca em TODAS as categorias (corpus inteiro).
 SCOPE_CATEGORY_ID = None
 
-# -------------------- Conjunto de teste rotulado --------------------
-# Perguntas COM resposta na base (Tanenbaum "Sistemas Operacionais Modernos"
-# + "Codigo-de-Conduta-Starian" + "Porcentagem no cotidiano"). Esperado: RESPONDE.
 IN_CORPUS = [
     "O que é um processo em um sistema operacional?",
     "O que é um deadlock (impasse) e quais condições são necessárias para ele ocorrer?",
@@ -44,8 +40,6 @@ IN_CORPUS = [
     "Como a porcentagem é utilizada no cotidiano?",
 ]
 
-# Perguntas FORA da base (conhecimento geral, sem relação com os documentos).
-# Esperado: RECUSA (não sei).
 OUT_OF_CORPUS = [
     "Qual é a capital da Austrália?",
     "Quem venceu a Copa do Mundo de futebol de 2022?",
@@ -76,7 +70,7 @@ def _clamp_confidence(raw) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    if value != value:  # NaN
+    if value != value:
         return None
     return max(0.0, min(1.0, value))
 
@@ -128,7 +122,6 @@ async def run_question(llm, vix, question):
     raw_cits = snap.get("citations") if isinstance(snap, dict) else []
     cits = _surviving_citations(raw_cits, len(contexts))
 
-    # Regra de produção: só é "resposta" se sobrou citação E há texto.
     decision = "ANSWER" if (answer and cits) else "ABSTAIN"
     return {"decision": decision, "answer": answer, "citations": cits,
             "contexts": contexts}
@@ -165,7 +158,6 @@ async def main():
             r["label"], r["question"] = label, q
             r["time_ms"] = int((time.perf_counter() - t0) * 1000)
 
-            # Juiz de alucinação só nas que RESPONDERAM.
             r["grounded"] = None
             if r["decision"] == "ANSWER":
                 snippets = [r["contexts"][c["context_index"]].get("snippet", "")
@@ -179,7 +171,6 @@ async def main():
                 " | grounded=OK" if r["grounded"] else " | ⚠️ALUCINOU")
             print(f"[{label:>3}] {mark:>8}{g}  ({r['time_ms']}ms)  {q[:60]}")
 
-        # -------------------- métricas --------------------
         ins = [r for r in results if r["label"] == "in"]
         outs = [r for r in results if r["label"] == "out"]
         answered = [r for r in results if r["decision"] == "ANSWER"]

@@ -16,9 +16,7 @@ class DocumentVersion(BaseModel):
         UniqueConstraint("document_id", "version_number", name="uq_document_version"),
     )
 
-    document_id: Mapped[str] = mapped_column(
-        ForeignKey("knowledge_documents.id"), nullable=False
-    )
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(String, nullable=False)
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

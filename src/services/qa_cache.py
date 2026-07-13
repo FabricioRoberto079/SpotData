@@ -44,9 +44,7 @@ class HybridQaCache(IQaCache):
         self._l2_hits = 0
         self._misses = 0
 
-    def lookup_exact(
-        self, question: str, category_id: str | None = None
-    ) -> dict[str, Any] | None:
+    def lookup_exact(self, question: str, category_id: str | None = None) -> dict[str, Any] | None:
         key = question_key(question, category_id)
         with self._l1_lock:
             entry = self._l1.get(key)
@@ -57,9 +55,7 @@ class HybridQaCache(IQaCache):
             self._l1_hits += 1
             return dict(entry.payload)
 
-    def _put_l1(
-        self, question: str, payload: dict[str, Any], category_id: str | None
-    ) -> None:
+    def _put_l1(self, question: str, payload: dict[str, Any], category_id: str | None) -> None:
         key = question_key(question, category_id)
         with self._l1_lock:
             existing = self._l1.get(key)
@@ -88,9 +84,6 @@ class HybridQaCache(IQaCache):
         try:
             with SessionLocal() as session:
                 distance = QaCacheEntry.embedding.cosine_distance(embedding)
-                # Match the scope exactly: a category chat never reuses a global
-                # answer (which drew on every category) nor another category's,
-                # and a global chat never reuses a narrower category answer.
                 scope = (
                     QaCacheEntry.category_id.is_(None)
                     if category_id is None
@@ -211,9 +204,7 @@ class HybridQaCache(IQaCache):
                 reverse=True,
             )[:10]
             total = self._l1_hits + self._l2_hits + self._misses
-            hit_ratio = (
-                (self._l1_hits + self._l2_hits) / total if total else 0.0
-            )
+            hit_ratio = (self._l1_hits + self._l2_hits) / total if total else 0.0
             data: dict[str, Any] = {
                 "l1_size": len(self._l1),
                 "l1_max": self._l1_max,

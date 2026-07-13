@@ -30,9 +30,7 @@ class WordExtractor(IContentExtractor):
             return self._extract_docx(data)
         if data.startswith(DOC_MAGIC):
             return self._extract_doc(data)
-        raise ValidationError(
-            "Word format not recognized. Expected .doc or .docx."
-        )
+        raise ValidationError("Word format not recognized. Expected .doc or .docx.")
 
     def pages_from_bytes(self, data: bytes) -> list[str] | None:
         if not data.startswith(DOCX_MAGIC):

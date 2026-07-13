@@ -19,16 +19,16 @@ class _Stub(IContentExtractor):
 def test_dispatches_per_content_type():
     pdf = _Stub("PDF")
     txt = _Stub("TXT")
-    extractor = TextExtractor({ContentType.PDF: pdf, ContentType.TEXTO: txt})
+    extractor = TextExtractor({ContentType.PDF: pdf, ContentType.TEXT: txt})
     assert extractor.extract_from_bytes(b"x", ContentType.PDF) == "PDF"
-    assert extractor.extract_from_bytes(b"x", ContentType.TEXTO) == "TXT"
+    assert extractor.extract_from_bytes(b"x", ContentType.TEXT) == "TXT"
     assert pdf.from_bytes_calls == [b"x"]
 
 
 def test_unsupported_type_raises_validation_error():
     extractor = TextExtractor({ContentType.PDF: _Stub("x")})
     with pytest.raises(ValidationError):
-        extractor.extract_from_bytes(b"x", ContentType.FOTO)
+        extractor.extract_from_bytes(b"x", ContentType.IMAGE)
 
 
 def test_plain_text_extractor_decodes_utf8():

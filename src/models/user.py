@@ -16,9 +16,7 @@ class User(BaseModel):
 
     name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    role: Mapped[str] = mapped_column(
-        String, nullable=False, default=UserRole.VIEWER.value
-    )
+    role: Mapped[str] = mapped_column(String, nullable=False, default=UserRole.VIEWER.value)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
