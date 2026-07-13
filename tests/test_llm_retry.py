@@ -3,6 +3,7 @@
 Transient provider errors (rate limit / timeout) are retried with backoff;
 deterministic errors (bad API key) fail fast without wasting attempts.
 """
+
 import pytest
 
 from src.integrations import llm
@@ -33,7 +34,7 @@ def test_embed_retries_transient_error_then_succeeds(monkeypatch):
 
     result = LlmClient().embed(["a", "b"], model="stub:model")
 
-    assert stub.calls == 3  # failed twice, succeeded on the third attempt
+    assert stub.calls == 3
     assert result == [[0.1, 0.2, 0.3, 0.4], [0.1, 0.2, 0.3, 0.4]]
 
 
@@ -45,7 +46,7 @@ def test_embed_does_not_retry_auth_error(monkeypatch):
         LlmClient().embed(["a"], model="stub:model")
 
     assert exc.value.kind == "auth"
-    assert stub.calls == 1  # deterministic error: no retries
+    assert stub.calls == 1
 
 
 def test_embed_gives_up_after_max_attempts(monkeypatch):
@@ -56,4 +57,4 @@ def test_embed_gives_up_after_max_attempts(monkeypatch):
         LlmClient().embed(["a"], model="stub:model")
 
     assert exc.value.kind == "timeout"
-    assert stub.calls == 3  # _EMBED_MAX_ATTEMPTS
+    assert stub.calls == 3
