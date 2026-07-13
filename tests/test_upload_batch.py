@@ -4,6 +4,7 @@
 The endpoint coroutine is called directly with a stub IDocumentService, the
 same style test_upload_strategies uses — no HTTP/auth layer involved.
 """
+
 import asyncio
 import io
 
@@ -96,9 +97,7 @@ def _run_batch(files, service, category_id=None):
 
 def test_batch_uploads_every_valid_file():
     service = _StubDocumentService()
-    result = _run_batch(
-        [_upload("a.txt", b"hello"), _upload("b.txt", b"world")], service
-    )
+    result = _run_batch([_upload("a.txt", b"hello"), _upload("b.txt", b"world")], service)
     assert result["total"] == 2
     assert result["succeeded"] == 2
     assert result["failed"] == 0
@@ -108,20 +107,16 @@ def test_batch_uploads_every_valid_file():
 
 def test_batch_infers_image_kind_from_extension():
     service = _StubDocumentService()
-    result = _run_batch(
-        [_upload("pic.png", _PNG_BYTES), _upload("notes.txt", b"hello")], service
-    )
+    result = _run_batch([_upload("pic.png", _PNG_BYTES), _upload("notes.txt", b"hello")], service)
     assert result["succeeded"] == 2
     by_name = {u["file_name"]: u for u in service.uploads}
-    assert by_name["pic.png"]["content_type"] == ContentType.FOTO
-    assert by_name["notes.txt"]["content_type"] == ContentType.TEXTO
+    assert by_name["pic.png"]["content_type"] == ContentType.IMAGE
+    assert by_name["notes.txt"]["content_type"] == ContentType.TEXT
 
 
 def test_batch_isolates_invalid_files():
     service = _StubDocumentService()
-    result = _run_batch(
-        [_upload("ok.txt", b"hello"), _upload("virus.exe", b"MZ...")], service
-    )
+    result = _run_batch([_upload("ok.txt", b"hello"), _upload("virus.exe", b"MZ...")], service)
     assert result["succeeded"] == 1
     assert result["failed"] == 1
     failed = next(item for item in result["items"] if not item["ok"])
@@ -132,9 +127,7 @@ def test_batch_isolates_invalid_files():
 
 def test_batch_isolates_ingestion_failures():
     service = _StubDocumentService(fail_names={"bad.txt"})
-    result = _run_batch(
-        [_upload("bad.txt", b"hello"), _upload("good.txt", b"world")], service
-    )
+    result = _run_batch([_upload("bad.txt", b"hello"), _upload("good.txt", b"world")], service)
     assert result["succeeded"] == 1
     assert result["failed"] == 1
     failed = next(item for item in result["items"] if not item["ok"])

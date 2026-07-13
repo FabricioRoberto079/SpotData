@@ -4,6 +4,7 @@ The service is exercised directly with the sqlite session from conftest and a
 stub IDocumentService, so no extraction/embedding runs — `complete` must simply
 hand the accumulated bytes to the regular ingestion entry point.
 """
+
 import pytest
 
 from src.enums.content_type import ContentType
@@ -158,7 +159,6 @@ def test_pause_and_resume_from_reported_offset(service, user_id):
     paused = service.pause(sid, user_id)
     assert paused["status"] == UploadSessionStatus.PAUSED.value
 
-    # The client asks where it stopped, then continues from there.
     status = service.get_status(sid, user_id)
     assert status["status"] == UploadSessionStatus.PAUSED.value
     assert status["next_offset"] == 6
@@ -186,7 +186,7 @@ def test_complete_ingests_and_clears_blob(service, session, doc_service, user_id
     assert result["document_id"] == "doc-1"
     upload = doc_service.uploads[0]
     assert upload["file_data"] == data
-    assert upload["content_type"] == ContentType.TEXTO
+    assert upload["content_type"] == ContentType.TEXT
     assert upload["category"] == DocumentCategory.TEXT
     assert upload["uploaded_by"] == user_id
 

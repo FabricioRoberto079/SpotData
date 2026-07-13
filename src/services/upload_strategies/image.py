@@ -35,7 +35,7 @@ class ImageUploadStrategy(IUploadStrategy):
         name = clean_optional(file_name) or filename
         return UploadPayload(
             file_data=data,
-            content_type=ContentType.FOTO,
+            content_type=ContentType.IMAGE,
             file_name=name,
             category=DocumentCategory.IMAGES,
         )

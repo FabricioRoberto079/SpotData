@@ -7,25 +7,21 @@ from src.exceptions import ValidationError
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
 
-# Extension -> (ContentType, DocumentCategory), single source of truth shared by
-# the upload strategies, the batch endpoint and resumable upload sessions.
 FILE_EXTENSION_MAP: dict[str, tuple[ContentType, DocumentCategory]] = {
     ".pdf": (ContentType.PDF, DocumentCategory.DOCUMENTS),
     ".doc": (ContentType.DOC, DocumentCategory.DOCUMENTS),
     ".docx": (ContentType.DOC, DocumentCategory.DOCUMENTS),
-    ".txt": (ContentType.TEXTO, DocumentCategory.TEXT),
-    ".md": (ContentType.TEXTO, DocumentCategory.TEXT),
+    ".txt": (ContentType.TEXT, DocumentCategory.TEXT),
+    ".md": (ContentType.TEXT, DocumentCategory.TEXT),
 }
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 DOCUMENT_EXTENSION_MAP: dict[str, tuple[ContentType, DocumentCategory]] = {
     **FILE_EXTENSION_MAP,
-    **dict.fromkeys(IMAGE_EXTENSIONS, (ContentType.FOTO, DocumentCategory.IMAGES)),
+    **dict.fromkeys(IMAGE_EXTENSIONS, (ContentType.IMAGE, DocumentCategory.IMAGES)),
 }
 
-# Allowed MIME types per declared extension. python-magic inspects the actual bytes,
-# so renaming a `malware.exe` to `report.pdf` will be caught here.
 ALLOWED_MIMES_BY_EXT: dict[str, set[str]] = {
     ".pdf": {"application/pdf"},
     ".doc": {"application/msword", "application/vnd.ms-office", "application/x-ole-storage"},
@@ -67,7 +63,7 @@ def validate_mime_for_ext(ext: str, data: bytes) -> None:
     """Raise ValidationError if the file's magic bytes don't match the declared extension."""
     allowed = ALLOWED_MIMES_BY_EXT.get(ext)
     if not allowed:
-        return  # Unknown extension is rejected upstream.
+        return
     mime = detect_mime(data)
     if mime and mime not in allowed:
         raise ValidationError(
@@ -88,9 +84,7 @@ async def read_upload(file: UploadFile) -> bytes:
             break
         total += len(chunk)
         if total > MAX_UPLOAD_SIZE:
-            raise ValidationError(
-                f"File exceeds {MAX_UPLOAD_SIZE // (1024 * 1024)}MB limit."
-            )
+            raise ValidationError(f"File exceeds {MAX_UPLOAD_SIZE // (1024 * 1024)}MB limit.")
         chunks.append(chunk)
     if total == 0:
         raise ValidationError("Empty file.")

@@ -19,13 +19,11 @@ class TextUploadStrategy(IUploadStrategy):
             raise ValidationError("Missing or empty 'text' for text upload.")
         encoded = text.strip().encode("utf-8")
         if len(encoded) > MAX_UPLOAD_SIZE:
-            raise ValidationError(
-                f"Text exceeds {MAX_UPLOAD_SIZE // (1024 * 1024)}MB limit."
-            )
+            raise ValidationError(f"Text exceeds {MAX_UPLOAD_SIZE // (1024 * 1024)}MB limit.")
         name = clean_optional(file_name) or "plain-text"
         return UploadPayload(
             file_data=encoded,
-            content_type=ContentType.TEXTO,
+            content_type=ContentType.TEXT,
             file_name=name,
             category=DocumentCategory.TEXT,
         )

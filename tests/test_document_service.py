@@ -65,9 +65,7 @@ class _StubIndex(IVectorIndexService):
         category_id=None,
     ):
         self.indexed.append((document_id, version_number, chunks[0]))
-        self.last_pages_per_chunk = (
-            list(pages_per_chunk) if pages_per_chunk is not None else None
-        )
+        self.last_pages_per_chunk = list(pages_per_chunk) if pages_per_chunk is not None else None
         self.last_category_id = category_id
         return len(chunks)
 
@@ -100,7 +98,7 @@ def test_add_version_indexes_and_marks_completed(session):
     svc = DocumentService(session, extractor, index, StubQaCache())
     doc_id = svc.create_document("a.txt", DocumentCategory.TEXT)
 
-    v = svc.add_version(doc_id, b"raw", ContentType.TEXTO)
+    v = svc.add_version(doc_id, b"raw", ContentType.TEXT)
     assert v["version_number"] == 1
     assert v["chunk_count"] == 3
     assert v["vectorization_status"] == "completed"
@@ -111,8 +109,8 @@ def test_add_version_demotes_previous(session):
     index = _StubIndex()
     svc = DocumentService(session, _StubExtractor("t"), index, StubQaCache())
     doc_id = svc.create_document("a.txt", DocumentCategory.TEXT)
-    svc.add_version(doc_id, b"v1", ContentType.TEXTO)
-    svc.add_version(doc_id, b"v2", ContentType.TEXTO)
+    svc.add_version(doc_id, b"v1", ContentType.TEXT)
+    svc.add_version(doc_id, b"v2", ContentType.TEXT)
     info = svc.get_document(doc_id)
     assert info["latest_version"] == 2
     assert info["versions_count"] == 2
@@ -127,14 +125,14 @@ def test_get_missing_doc_raises(doc_service):
 def test_add_version_to_missing_doc_raises(session):
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     with pytest.raises(NotFoundError):
-        svc.add_version("nope", b"x", ContentType.TEXTO)
+        svc.add_version("nope", b"x", ContentType.TEXT)
 
 
 def test_add_version_with_empty_extracted_text_raises_validation(session):
     svc = DocumentService(session, _StubExtractor(""), _StubIndex(), StubQaCache())
     doc_id = svc.create_document("a.txt", DocumentCategory.TEXT)
     with pytest.raises(ValidationError):
-        svc.add_version(doc_id, b"x", ContentType.TEXTO)
+        svc.add_version(doc_id, b"x", ContentType.TEXT)
 
 
 def test_delete_purges_vectors_and_removes_doc(session):
@@ -152,10 +150,10 @@ def test_upload_same_filename_reuses_document_as_new_version(session):
     cat = _seed_category(session)
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     first = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user, cat
+        b"v1", ContentType.TEXT, "report.txt", DocumentCategory.TEXT, user, cat
     )
     second = svc.upload_new_document(
-        b"v2", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, user, cat
+        b"v2", ContentType.TEXT, "report.txt", DocumentCategory.TEXT, user, cat
     )
     assert first["created"] is True
     assert second["created"] is False
@@ -169,10 +167,10 @@ def test_upload_same_filename_different_users_creates_separate_docs(session):
     cat = _seed_category(session)
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     a = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u1, cat
+        b"v1", ContentType.TEXT, "report.txt", DocumentCategory.TEXT, u1, cat
     )
     b = svc.upload_new_document(
-        b"v1", ContentType.TEXTO, "report.txt", DocumentCategory.TEXT, u2, cat
+        b"v1", ContentType.TEXT, "report.txt", DocumentCategory.TEXT, u2, cat
     )
     assert a["document_id"] != b["document_id"]
     assert a["created"] is True
@@ -184,7 +182,7 @@ def test_upload_unknown_category_raises_validation(session):
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), StubQaCache())
     with pytest.raises(ValidationError):
         svc.upload_new_document(
-            b"v1", ContentType.TEXTO, "r.txt", DocumentCategory.TEXT, user, "ghost-cat"
+            b"v1", ContentType.TEXT, "r.txt", DocumentCategory.TEXT, user, "ghost-cat"
         )
 
 
@@ -193,9 +191,8 @@ def test_add_version_invalidates_cache(session):
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), cache)
     doc_id = svc.create_document("a.txt", DocumentCategory.TEXT)
     before = cache.invalidate_calls
-    svc.add_version(doc_id, b"raw", ContentType.TEXTO)
+    svc.add_version(doc_id, b"raw", ContentType.TEXT)
     assert cache.invalidate_calls == before + 1
-    # No access-control category -> shared document -> whole cache invalidated.
     assert cache.invalidated_categories[-1] is None
 
 
@@ -204,10 +201,8 @@ def test_add_version_invalidates_only_documents_category(session):
     _seed_category(session, "cat-1")
     cache = StubQaCache()
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), cache)
-    doc_id = svc.create_document(
-        "a.txt", DocumentCategory.TEXT, "u1", category_id="cat-1"
-    )
-    svc.add_version(doc_id, b"raw", ContentType.TEXTO)
+    doc_id = svc.create_document("a.txt", DocumentCategory.TEXT, "u1", category_id="cat-1")
+    svc.add_version(doc_id, b"raw", ContentType.TEXT)
     assert cache.invalidated_categories[-1] == "cat-1"
 
 
@@ -229,7 +224,7 @@ def test_add_version_no_pages_falls_back_to_flat(session):
     svc = DocumentService(session, extractor, index, StubQaCache())
     doc_id = svc.create_document("nota.txt", DocumentCategory.TEXT)
 
-    svc.add_version(doc_id, b"raw", ContentType.TEXTO)
+    svc.add_version(doc_id, b"raw", ContentType.TEXT)
 
     assert index.last_pages_per_chunk is None
 
@@ -239,9 +234,7 @@ def test_delete_document_invalidates_cache(session):
     svc = DocumentService(session, _StubExtractor("t"), _StubIndex(), cache)
     _seed_user(session, "u1")
     _seed_category(session, "cat-1")
-    doc_id = svc.create_document(
-        "a.txt", DocumentCategory.TEXT, "u1", category_id="cat-1"
-    )
+    doc_id = svc.create_document("a.txt", DocumentCategory.TEXT, "u1", category_id="cat-1")
     before = cache.invalidate_calls
     svc.delete_document(doc_id)
     assert cache.invalidate_calls == before + 1
@@ -250,7 +243,7 @@ def test_delete_document_invalidates_cache(session):
 
 def _upload(svc, file_name, category_id):
     return svc.upload_new_document(
-        b"x", ContentType.TEXTO, file_name, DocumentCategory.TEXT, "u1", category_id
+        b"x", ContentType.TEXT, file_name, DocumentCategory.TEXT, "u1", category_id
     )["document_id"]
 
 
