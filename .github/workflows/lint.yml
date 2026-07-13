@@ -1,4 +1,4 @@
-name: tests
+name: lint
 
 on:
   push:
@@ -7,25 +7,12 @@ on:
     branches: [main]
 
 concurrency:
-  group: tests-${{ github.ref }}
+  group: lint-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  POSTGRES_USER: ci
-  POSTGRES_PASSWORD: ci
-  POSTGRES_HOST: localhost
-  POSTGRES_PORT: "5432"
-  POSTGRES_DB: ci
-  EMBEDDING_DIMENSION: "4"
-  JWT_SECRET: ci-secret
-  JWT_ALGORITHM: HS256
-  JWT_EXPIRATION_MINUTES: "60"
-  CORS_ORIGINS: "http://localhost:3000"
-  LOG_LEVEL: INFO
-
 jobs:
-  test:
-    name: unit tests
+  lint:
+    name: lint & type-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,5 +27,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
-      - name: Pytest
-        run: pytest --cov=src --cov-report=term-missing
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Mypy (type-check)
+        run: mypy

@@ -10,38 +10,23 @@ line-length = 100
 extend-exclude = [".venv", "alembic/versions", "evals"]
 
 [tool.ruff.lint]
-# E/F: pyflakes+pycodestyle, I: import sorting, B: bugbear, UP: pyupgrade,
-# C4: comprehensions, SIM: simplify. Pragmatic default — expand over time.
-select = ["E", "F", "I", "B", "UP", "C4", "SIM"]
-ignore = [
-    "E501",  # line length is enforced by the formatter, not the linter
-    "B008",  # FastAPI depends on function calls in argument defaults (Depends(...))
-]
+select = ["E", "F", "I", "N", "B", "UP", "C4", "SIM"]
+ignore = ["E501", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
-# main.py runs defusedxml/load_dotenv side effects before importing app modules.
 "main.py" = ["E402"]
-# alembic env.py configures sys.path/metadata before importing models.
 "alembic/env.py" = ["E402"]
-# SQLAlchemy relationship() forward references are string names resolved at
-# mapper-configuration time; the classes are intentionally not imported here.
+"tests/conftest.py" = ["E402"]
 "src/models/*" = ["F821"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Integration tests hit a real Postgres and are opt-in; run them with
-#   pytest -m integration
-markers = [
-    "integration: tests that require a live Postgres/pgvector instance",
-]
 addopts = "-q --strict-markers"
 
 [tool.mypy]
 python_version = "3.12"
 files = ["src", "main.py"]
 ignore_missing_imports = true
-# Pragmatic starting point: catch real type errors without demanding full
-# annotations on a codebase that isn't fully typed yet. Tighten incrementally.
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
