@@ -5,6 +5,7 @@ reachable without a JWT. Every request here carries no Authorization header, so
 `authenticate_request` must reject it before any service or DB access — the
 assertions never depend on a database being available.
 """
+
 from fastapi.testclient import TestClient
 
 from main import app
@@ -67,9 +68,7 @@ def test_pause_upload_session_requires_auth():
 
 
 def test_complete_upload_session_requires_auth():
-    assert (
-        client.post("/documents/upload-sessions/some-id/complete").status_code == 401
-    )
+    assert client.post("/documents/upload-sessions/some-id/complete").status_code == 401
 
 
 def test_abort_upload_session_requires_auth():

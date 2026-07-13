@@ -60,7 +60,6 @@ def test_forgot_password_emails_a_code_for_a_known_user(session):
     code = _extract_code(sender.sent[0]["body"])
 
     stored = session.scalars(select(PasswordResetCode)).one()
-    # The code is stored hashed, never in clear text.
     assert stored.code_hash != code
     assert verify_password(code, stored.code_hash)
 
@@ -72,7 +71,6 @@ def test_requesting_a_new_code_invalidates_the_previous_one(session):
     service.request_password_reset("user@x.com")
     service.request_password_reset("user@x.com")
 
-    # Only the newest unused code survives.
     codes = session.scalars(select(PasswordResetCode)).all()
     assert len(codes) == 1
 
@@ -114,7 +112,6 @@ def test_reset_password_wrong_code_raises_and_counts_an_attempt(session):
 
     stored = session.scalars(select(PasswordResetCode)).one()
     assert stored.attempts == 1
-    # Original password is untouched.
     assert verify_password("oldpass123", _user(session).password_hash)
 
 
@@ -137,4 +134,3 @@ def test_reset_password_unknown_email_raises(session):
         AuthService(session, FakeEmailSender()).reset_password(
             "ghost@x.com", "123456", "newpass456"
         )
-

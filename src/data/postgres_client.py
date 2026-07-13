@@ -1,4 +1,5 @@
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
@@ -29,3 +30,17 @@ def get_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+@contextmanager
+def transaction(session: Session) -> Iterator[Session]:
+    """Unit of work: commit on success, rollback and re-raise on any error.
+
+    Intermediate commits inside the block are fine — the final commit is then
+    a no-op. `session.refresh()` calls belong after the block."""
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise

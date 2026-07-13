@@ -5,7 +5,7 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.enums.user_role import UserRole
 from src.exceptions import ConflictError, NotFoundError, ValidationError
 from src.interfaces.admin_service import IAdminService
@@ -30,7 +30,6 @@ class AdminService(IAdminService):
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    # --- serialization ---
     @staticmethod
     def _category_out(c: Category) -> dict:
         return {
@@ -51,7 +50,6 @@ class AdminService(IAdminService):
             "is_active": u.is_active,
         }
 
-    # --- lookups ---
     def _get_category(self, category_id: str) -> Category:
         category = self._session.get(Category, category_id)
         if category is None:
@@ -70,38 +68,25 @@ class AdminService(IAdminService):
             stmt = stmt.where(Category.id != exclude_id)
         return self._session.execute(stmt).first() is not None
 
-    # --- categories ---
-    def create_category(
-        self, name: str, created_by: str | None = None
-    ) -> dict:
+    def create_category(self, name: str, created_by: str | None = None) -> dict:
         normalized = normalize_category_name(name)
         if not normalized:
             raise ValidationError("Category name has no usable characters.")
         final_slug = normalized.lower()
-        try:
+        with transaction(self._session):
             if self._slug_taken(final_slug):
                 raise ConflictError(f"Category already exists: '{normalized}'.")
-            category = Category(
-                name=normalized, slug=final_slug, created_by=created_by
-            )
+            category = Category(name=normalized, slug=final_slug, created_by=created_by)
             self._session.add(category)
-            self._session.commit()
-            self._session.refresh(category)
-            return self._category_out(category)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(category)
+        return self._category_out(category)
 
     def list_categories(self) -> list[dict]:
-        rows = (
-            self._session.execute(select(Category).order_by(Category.name))
-            .scalars()
-            .all()
-        )
+        rows = self._session.execute(select(Category).order_by(Category.name)).scalars().all()
         return [self._category_out(c) for c in rows]
 
     def update_category(self, category_id: str, fields: dict) -> dict:
-        try:
+        with transaction(self._session):
             category = self._get_category(category_id)
             if fields.get("name") is not None:
                 normalized = normalize_category_name(fields["name"])
@@ -112,50 +97,31 @@ class AdminService(IAdminService):
                     raise ConflictError(f"Category already exists: '{normalized}'.")
                 category.name = normalized
                 category.slug = new_slug
-            self._session.commit()
-            self._session.refresh(category)
-            return self._category_out(category)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(category)
+        return self._category_out(category)
 
     def delete_category(self, category_id: str) -> None:
-        try:
+        with transaction(self._session):
             category = self._get_category(category_id)
             self._session.delete(category)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
-    # --- user management ---
     def list_users(self) -> list[dict]:
-        rows = (
-            self._session.execute(select(User).order_by(User.email)).scalars().all()
-        )
+        rows = self._session.execute(select(User).order_by(User.email)).scalars().all()
         return [self._user_out(u) for u in rows]
 
     def set_user_role(self, user_id: str, role: UserRole) -> dict:
-        try:
+        with transaction(self._session):
             user = self._get_user(user_id)
             user.role = role.value
-            self._session.commit()
-            self._session.refresh(user)
-            return self._user_out(user)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(user)
+        return self._user_out(user)
 
     def set_user_active(self, user_id: str, is_active: bool) -> dict:
-        try:
+        with transaction(self._session):
             user = self._get_user(user_id)
             user.is_active = is_active
-            self._session.commit()
-            self._session.refresh(user)
-            return self._user_out(user)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(user)
+        return self._user_out(user)
 
 
 def get_admin_service(session: Session = Depends(get_session)) -> IAdminService:

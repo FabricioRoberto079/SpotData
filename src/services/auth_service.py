@@ -1,3 +1,4 @@
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends
@@ -10,7 +11,7 @@ from src.auth import (
     issue_token,
     verify_password,
 )
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.enums.user_role import UserRole
 from src.exceptions import ConflictError, UnauthorizedError
 from src.integrations.email import get_email_sender
@@ -19,8 +20,6 @@ from src.interfaces.email_sender import IEmailSender
 from src.models.password_reset_code import PasswordResetCode
 from src.models.user import User
 
-# Reset codes are short-lived and brute-force limited. These are deliberate
-# constants, not env config — tune here if the policy changes.
 _CODE_TTL_MINUTES = 15
 _MAX_ATTEMPTS = 5
 _RESET_EMAIL_SUBJECT = "SpotData — código de redefinição de senha"
@@ -51,15 +50,13 @@ def _as_utc(value: datetime) -> datetime:
 
 
 class AuthService(IAuthService):
-    def __init__(
-        self, session: Session, email_sender: IEmailSender | None = None
-    ) -> None:
+    def __init__(self, session: Session, email_sender: IEmailSender | None = None) -> None:
         self._session = session
         self._email_sender = email_sender or get_email_sender()
 
     def register(self, name: str, email: str, password: str) -> dict:
         email_norm = email.strip().lower()
-        try:
+        with transaction(self._session):
             existing = self._session.execute(
                 select(User).where(User.email == email_norm)
             ).scalar_one_or_none()
@@ -73,11 +70,7 @@ class AuthService(IAuthService):
                 password_hash=hash_password(password),
             )
             self._session.add(user)
-            self._session.commit()
-            self._session.refresh(user)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(user)
 
         return _user_out(user)
 
@@ -97,14 +90,12 @@ class AuthService(IAuthService):
         user = self._session.execute(
             select(User).where(User.email == email_norm)
         ).scalar_one_or_none()
-        # Never reveal whether the email is registered: silently no-op otherwise.
         if user is None:
             return
 
         code = generate_reset_code()
         expires_at = datetime.now(UTC) + timedelta(minutes=_CODE_TTL_MINUTES)
-        try:
-            # Drop any previous unused codes so only the newest one is valid.
+        with transaction(self._session):
             self._session.execute(
                 delete(PasswordResetCode).where(
                     PasswordResetCode.user_id == user.id,
@@ -118,13 +109,7 @@ class AuthService(IAuthService):
                     expires_at=expires_at,
                 )
             )
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
-        # Send only after the code is persisted, so a send failure never leaves
-        # the user with a code we can't verify.
         self._email_sender.send(
             to=user.email,
             subject=_RESET_EMAIL_SUBJECT,
@@ -152,7 +137,6 @@ class AuthService(IAuthService):
                 .first()
             )
 
-        # Generic error for every failure mode — no oracle for attackers.
         invalid = UnauthorizedError("Invalid or expired reset code.")
         if user is None or record is None:
             raise invalid
@@ -162,20 +146,13 @@ class AuthService(IAuthService):
             raise invalid
 
         if not verify_password(code, record.code_hash):
-            try:
+            with suppress(Exception), transaction(self._session):
                 record.attempts += 1
-                self._session.commit()
-            except Exception:
-                self._session.rollback()
             raise invalid
 
-        try:
+        with transaction(self._session):
             user.password_hash = hash_password(new_password)
             record.used_at = now
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
 
 def get_auth_service(session: Session = Depends(get_session)) -> IAuthService:

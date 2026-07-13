@@ -20,16 +20,11 @@ def _seed_user(session, user_id, role=UserRole.VIEWER):
 
 
 def test_normalize_category_name():
-    # two words -> single underscore, UPPERCASE
     assert normalize_category_name("Recursos Humanos") == "RECURSOS_HUMANOS"
-    # leading/trailing trimmed, multiple inner spaces collapse to one underscore
     assert normalize_category_name("   Recursos    Humanos   ") == "RECURSOS_HUMANOS"
-    # special characters and accents removed
     assert normalize_category_name("Jurídico/Contratos!") == "JURIDICOCONTRATOS"
     assert normalize_category_name("Pós-Vendas") == "POSVENDAS"
-    # single word
     assert normalize_category_name("financeiro") == "FINANCEIRO"
-    # nothing usable
     assert normalize_category_name("  @#$  ") == ""
 
 
@@ -50,7 +45,7 @@ def test_create_category_duplicate_conflicts(session):
     svc = AdminService(session)
     svc.create_category("Financeiro")
     with pytest.raises(ConflictError):
-        svc.create_category("  financeiro ")  # normalizes to the same slug
+        svc.create_category("  financeiro ")
 
 
 def test_update_category_renames_and_renormalizes(session):

@@ -3,7 +3,7 @@ import logging
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.enums.upload_session_status import UploadSessionStatus
 from src.exceptions import ConflictError, NotFoundError, ValidationError
 from src.interfaces.document_service import IDocumentService
@@ -70,13 +70,11 @@ class UploadSessionService(IUploadSessionService):
         if total_size <= 0:
             raise ValidationError("total_size must be a positive number of bytes.")
         if total_size > MAX_UPLOAD_SIZE:
-            raise ValidationError(
-                f"File exceeds {MAX_UPLOAD_SIZE // (1024 * 1024)}MB limit."
-            )
+            raise ValidationError(f"File exceeds {MAX_UPLOAD_SIZE // (1024 * 1024)}MB limit.")
         if category_id is not None and self._session.get(Category, category_id) is None:
             raise ValidationError(f"Unknown category: {category_id}")
 
-        try:
+        with transaction(self._session):
             row = UploadSession(
                 user_id=user_id,
                 category_id=category_id,
@@ -87,11 +85,7 @@ class UploadSessionService(IUploadSessionService):
                 data=b"",
             )
             self._session.add(row)
-            self._session.commit()
-            self._session.refresh(row)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(row)
         return self._serialize(row)
 
     def get_status(self, session_id: str, user_id: str) -> dict:
@@ -116,27 +110,18 @@ class UploadSessionService(IUploadSessionService):
             raise ValidationError(
                 f"Chunk overflows the declared total size of {row.total_size} bytes."
             )
-        try:
+        with transaction(self._session):
             row.data = row.data + chunk
             row.bytes_received += len(chunk)
-            # Sending bytes to a paused session implicitly resumes it.
             row.status = UploadSessionStatus.ACTIVE.value
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
         return self._serialize(row)
 
     def pause(self, session_id: str, user_id: str) -> dict:
         row = self._load_owned(session_id, user_id)
         if row.status == UploadSessionStatus.COMPLETED.value:
             raise ConflictError("Upload session already completed.")
-        try:
+        with transaction(self._session):
             row.status = UploadSessionStatus.PAUSED.value
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
         return self._serialize(row)
 
     def complete(self, session_id: str, user_id: str) -> dict:
@@ -161,15 +146,9 @@ class UploadSessionService(IUploadSessionService):
             user_id,
             row.category_id,
         )
-        # Mark done only after ingestion succeeded, so a failed pipeline leaves
-        # the session resumable/retriable instead of losing the bytes.
-        try:
+        with transaction(self._session):
             row.status = UploadSessionStatus.COMPLETED.value
             row.data = b""
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
         logger.info(
             "upload session %s completed -> document=%s",
             session_id,
@@ -179,12 +158,8 @@ class UploadSessionService(IUploadSessionService):
 
     def abort(self, session_id: str, user_id: str) -> None:
         row = self._load_owned(session_id, user_id)
-        try:
+        with transaction(self._session):
             self._session.delete(row)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
 
 def get_upload_session_service(
