@@ -9,27 +9,26 @@ from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.enums.vectorization_status import VectorizationStatus
 from src.exceptions import NotFoundError, ValidationError
-from src.interfaces.document_service import IDocumentService
-from src.interfaces.qa_cache import IQaCache
-from src.interfaces.text_extractor import ITextExtractor
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.category import Category
 from src.models.document_version import DocumentVersion
 from src.models.knowledge_document import KnowledgeDocument
+from src.models.vector_chunk import VectorChunk
+from src.protocols.qa_cache import QaCacheProtocol
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
 from src.services.qa_cache import get_qa_cache
-from src.services.text_extractor import get_text_extractor
+from src.services.text_extractor import TextExtractor, get_text_extractor
 from src.services.vector_index_service import get_vector_index_service
 
 logger = logging.getLogger(__name__)
 
 
-class DocumentService(IDocumentService):
+class DocumentService:
     def __init__(
         self,
         session: Session,
-        text_extractor: ITextExtractor,
-        vector_index: IVectorIndexService,
-        cache: IQaCache,
+        text_extractor: TextExtractor,
+        vector_index: VectorIndexServiceProtocol,
+        cache: QaCacheProtocol,
     ) -> None:
         self._session = session
         self._text_extractor = text_extractor
@@ -92,12 +91,42 @@ class DocumentService(IDocumentService):
         self._session.refresh(doc)
         return doc.id
 
+    def _latest_version_row(self, document_id: str) -> DocumentVersion | None:
+        return self._session.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.document_id == document_id)
+            .order_by(DocumentVersion.version_number.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
     def add_version(
         self,
         document_id: str,
         file_data: bytes,
         content_type: ContentType,
     ) -> dict:
+        """Ingest ``file_data`` as a new version. Bytes identical to the current
+        latest version are a no-op returning the existing version, so a retried
+        upload (batch or resumable session) never appends a duplicate."""
+        latest = self._latest_version_row(document_id)
+        if latest is not None and latest.file_data == file_data:
+            chunk_count = self._session.execute(
+                select(func.count())
+                .select_from(VectorChunk)
+                .where(
+                    VectorChunk.document_id == document_id,
+                    VectorChunk.version_number == latest.version_number,
+                )
+            ).scalar_one()
+            return {
+                "id": latest.id,
+                "document_id": document_id,
+                "version_number": latest.version_number,
+                "vectorization_status": latest.vectorization_status,
+                "content_type": latest.content_type,
+                "chunk_count": chunk_count,
+            }
+
         text = self._text_extractor.extract_from_bytes(file_data, content_type)
         if not text:
             raise ValidationError("No text extracted from uploaded content.")
@@ -279,8 +308,8 @@ class DocumentService(IDocumentService):
 
 def get_document_service(
     session: Session = Depends(get_session),
-    text_extractor: ITextExtractor = Depends(get_text_extractor),
-    vector_index: IVectorIndexService = Depends(get_vector_index_service),
-    cache: IQaCache = Depends(get_qa_cache),
-) -> IDocumentService:
+    text_extractor: TextExtractor = Depends(get_text_extractor),
+    vector_index: VectorIndexServiceProtocol = Depends(get_vector_index_service),
+    cache: QaCacheProtocol = Depends(get_qa_cache),
+) -> DocumentService:
     return DocumentService(session, text_extractor, vector_index, cache)

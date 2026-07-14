@@ -3,8 +3,6 @@ import pytest
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.exceptions import NotFoundError, ValidationError
-from src.interfaces.text_extractor import ITextExtractor
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.category import Category
 from src.models.user import User
 from src.services.document_service import DocumentService
@@ -25,7 +23,7 @@ def _seed_category(session, category_id: str = "cat-1") -> str:
     return category_id
 
 
-class _StubExtractor(ITextExtractor):
+class _StubExtractor:
     def __init__(self, text: str = "extracted", pages: list[str] | None = None):
         self.text = text
         self.pages = pages
@@ -37,7 +35,7 @@ class _StubExtractor(ITextExtractor):
         return self.pages
 
 
-class _StubIndex(IVectorIndexService):
+class _StubIndex:
     def __init__(self):
         self.indexed: list[tuple] = []
         self.demoted: list[str] = []
@@ -260,3 +258,14 @@ def test_list_documents_filters_by_category(session):
 
     everything = svc.list_documents()
     assert {d["file_name"] for d in everything["items"]} == {"a.txt", "b.txt"}
+
+
+def test_add_version_identical_bytes_returns_existing_version(doc_service):
+    doc_id = doc_service.create_document("a.txt", DocumentCategory.TEXT)
+    first = doc_service.add_version(doc_id, b"conteudo", ContentType.TEXT)
+    again = doc_service.add_version(doc_id, b"conteudo", ContentType.TEXT)
+    assert again["version_number"] == first["version_number"]
+    assert doc_service.get_document(doc_id)["versions_count"] == 1
+
+    changed = doc_service.add_version(doc_id, b"conteudo v2", ContentType.TEXT)
+    assert changed["version_number"] == 2

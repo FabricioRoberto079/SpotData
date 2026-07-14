@@ -2,6 +2,7 @@ import pytest
 
 from src.enums.user_role import UserRole
 from src.exceptions import ConflictError, NotFoundError, ValidationError
+from src.models.knowledge_document import KnowledgeDocument
 from src.models.user import User
 from src.services.admin_service import AdminService, normalize_category_name
 
@@ -69,3 +70,28 @@ def test_set_user_role_and_active(session):
     assert promoted["role"] == "editor"
     disabled = svc.set_user_active("u1", False)
     assert disabled["is_active"] is False
+
+
+def test_cannot_demote_or_deactivate_last_active_admin(session):
+    admin = _seed_user(session, "a1", role=UserRole.ADMIN)
+    svc = AdminService(session)
+    with pytest.raises(ConflictError):
+        svc.set_user_role(admin.id, UserRole.VIEWER)
+    with pytest.raises(ConflictError):
+        svc.set_user_active(admin.id, False)
+
+
+def test_admin_change_allowed_with_another_active_admin(session):
+    a1 = _seed_user(session, "a1", role=UserRole.ADMIN)
+    _seed_user(session, "a2", role=UserRole.ADMIN)
+    svc = AdminService(session)
+    assert svc.set_user_role(a1.id, UserRole.VIEWER)["role"] == UserRole.VIEWER.value
+
+
+def test_delete_category_in_use_conflicts(session):
+    svc = AdminService(session)
+    cat = svc.create_category("Vendas")
+    session.add(KnowledgeDocument(file_name="doc.txt", category="documents", category_id=cat["id"]))
+    session.commit()
+    with pytest.raises(ConflictError):
+        svc.delete_category(cat["id"])

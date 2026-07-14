@@ -1,3 +1,4 @@
+import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -15,10 +16,11 @@ from src.data.postgres_client import get_session, transaction
 from src.enums.user_role import UserRole
 from src.exceptions import ConflictError, UnauthorizedError
 from src.integrations.email import get_email_sender
-from src.interfaces.auth_service import IAuthService
-from src.interfaces.email_sender import IEmailSender
 from src.models.password_reset_code import PasswordResetCode
 from src.models.user import User
+from src.protocols.email_sender import EmailSenderProtocol
+
+logger = logging.getLogger(__name__)
 
 _CODE_TTL_MINUTES = 15
 _MAX_ATTEMPTS = 5
@@ -49,8 +51,8 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-class AuthService(IAuthService):
-    def __init__(self, session: Session, email_sender: IEmailSender | None = None) -> None:
+class AuthService:
+    def __init__(self, session: Session, email_sender: EmailSenderProtocol | None = None) -> None:
         self._session = session
         self._email_sender = email_sender or get_email_sender()
 
@@ -86,14 +88,19 @@ class AuthService(IAuthService):
         return {"access_token": token}
 
     def request_password_reset(self, email: str) -> None:
+        """Always succeeds with the same generic outcome, whether or not the email
+        is registered: the unknown-email path burns an equivalent bcrypt hash and
+        send failures are logged but never surfaced, so neither the status code
+        nor (roughly) the response time reveals account existence."""
         email_norm = email.strip().lower()
         user = self._session.execute(
             select(User).where(User.email == email_norm)
         ).scalar_one_or_none()
+        code = generate_reset_code()
         if user is None:
+            hash_password(code)
             return
 
-        code = generate_reset_code()
         expires_at = datetime.now(UTC) + timedelta(minutes=_CODE_TTL_MINUTES)
         with transaction(self._session):
             self._session.execute(
@@ -110,11 +117,14 @@ class AuthService(IAuthService):
                 )
             )
 
-        self._email_sender.send(
-            to=user.email,
-            subject=_RESET_EMAIL_SUBJECT,
-            body=_reset_email_body(user.name, code),
-        )
+        try:
+            self._email_sender.send(
+                to=user.email,
+                subject=_RESET_EMAIL_SUBJECT,
+                body=_reset_email_body(user.name, code),
+            )
+        except Exception:
+            logger.exception("password reset email failed to send")
 
     def reset_password(self, email: str, code: str, new_password: str) -> None:
         email_norm = email.strip().lower()
@@ -155,5 +165,5 @@ class AuthService(IAuthService):
             record.used_at = now
 
 
-def get_auth_service(session: Session = Depends(get_session)) -> IAuthService:
+def get_auth_service(session: Session = Depends(get_session)) -> AuthService:
     return AuthService(session, get_email_sender())

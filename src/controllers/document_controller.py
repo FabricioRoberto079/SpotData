@@ -9,11 +9,11 @@ from src.enums.content_type import ContentType
 from src.enums.upload_kind import UploadKind
 from src.enums.user_role import UserRole
 from src.exceptions import DomainError, ValidationError
-from src.interfaces.document_service import IDocumentService
-from src.interfaces.vector_index_service import IVectorIndexService
+from src.integrations.llm import LlmError
 from src.models.user import User
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
 from src.schemas.document import DocumentList, DocumentOut, SearchResults
-from src.services.document_service import get_document_service
+from src.services.document_service import DocumentService, get_document_service
 from src.services.upload_strategies import get_upload_strategy
 from src.services.upload_strategies._shared import IMAGE_EXTENSIONS, extract_ext
 from src.services.vector_index_service import get_vector_index_service
@@ -67,7 +67,7 @@ async def list_all_documents(
     ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     return document_service.list_documents(category_id, limit=limit, offset=offset)
 
@@ -94,7 +94,7 @@ async def upload_document(
     text: str | None = Form(default=None),
     file_name: str | None = Form(default=None),
     current_user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     try:
         strategy = get_upload_strategy(kind)
@@ -141,7 +141,7 @@ async def upload_documents_batch(
         default=None, description="Optional target category id for every file."
     ),
     current_user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     if not files:
         raise ValidationError("No files sent.")
@@ -174,6 +174,8 @@ async def upload_documents_batch(
             )
         except DomainError as exc:
             items.append({"file_name": file.filename, "ok": False, "error": exc.message})
+        except LlmError as exc:
+            items.append({"file_name": file.filename, "ok": False, "error": exc.detail})
 
     succeeded = sum(1 for item in items if item["ok"])
     return {
@@ -196,7 +198,7 @@ async def search_documents(
         default=None,
         description="Optional. Limit the search to a single category. Omit to search every category.",
     ),
-    vector_index: IVectorIndexService = Depends(get_vector_index_service),
+    vector_index: VectorIndexServiceProtocol = Depends(get_vector_index_service),
 ):
     if not q.strip():
         raise ValidationError("Empty query.")
@@ -207,7 +209,7 @@ async def search_documents(
 @router.get("/{document_id}", response_model=DocumentOut)
 async def get_document_metadata(
     document_id: str,
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     return document_service.get_document(document_id)
 
@@ -216,7 +218,7 @@ async def get_document_metadata(
 async def delete_document_endpoint(
     document_id: str,
     _user: User = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN)),
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     document_service.delete_document(document_id)
     return {"message": "Document removed."}
@@ -225,7 +227,7 @@ async def delete_document_endpoint(
 @router.get("/{document_id}/download")
 async def download_latest(
     document_id: str,
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     return _file_response(*document_service.get_version_file(document_id, version_number=None))
 
@@ -234,7 +236,7 @@ async def download_latest(
 async def download_version(
     document_id: str,
     version_number: int,
-    document_service: IDocumentService = Depends(get_document_service),
+    document_service: DocumentService = Depends(get_document_service),
 ):
     return _file_response(
         *document_service.get_version_file(document_id, version_number=version_number)

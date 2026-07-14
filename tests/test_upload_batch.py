@@ -1,7 +1,7 @@
 """Batch upload endpoint: kind inference per extension and per-file isolation
 (one bad file reports an error in its item instead of failing the batch).
 
-The endpoint coroutine is called directly with a stub IDocumentService, the
+The endpoint coroutine is called directly with a stub DocumentService, the
 same style test_upload_strategies uses — no HTTP/auth layer involved.
 """
 
@@ -14,7 +14,7 @@ from fastapi import UploadFile
 from src.controllers.document_controller import upload_documents_batch
 from src.enums.content_type import ContentType
 from src.exceptions import ValidationError
-from src.interfaces.document_service import IDocumentService
+from src.integrations.llm import LlmError
 from src.models.user import User
 
 _PNG_BYTES = (
@@ -33,7 +33,7 @@ def _user() -> User:
     return User(id="u1", name="u1", email="u1@x.com", password_hash="!disabled!")
 
 
-class _StubDocumentService(IDocumentService):
+class _StubDocumentService:
     def __init__(self, fail_names: set[str] | None = None):
         self.uploads: list[dict] = []
         self._fail_names = fail_names or set()
@@ -148,3 +148,29 @@ def test_batch_rejects_empty_and_oversized_batches():
     with pytest.raises(ValidationError):
         _run_batch([_upload(f"f{i}.txt", b"x") for i in range(21)], service)
     assert service.uploads == []
+
+
+def test_batch_isolates_llm_failures():
+    class _LlmFailing(_StubDocumentService):
+        def upload_new_document(
+            self,
+            file_data,
+            content_type,
+            file_name,
+            category,
+            uploaded_by=None,
+            category_id=None,
+        ):
+            if file_name == "bad.txt":
+                raise LlmError("rate_limit", 429, "LLM rate limit reached.")
+            return super().upload_new_document(
+                file_data, content_type, file_name, category, uploaded_by, category_id
+            )
+
+    service = _LlmFailing()
+    result = _run_batch([_upload("ok.txt", b"hello"), _upload("bad.txt", b"world")], service)
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    bad = next(item for item in result["items"] if item["file_name"] == "bad.txt")
+    assert bad["ok"] is False
+    assert "rate limit" in bad["error"].lower()
