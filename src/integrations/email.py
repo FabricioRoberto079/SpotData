@@ -7,7 +7,7 @@ from email.message import EmailMessage
 
 from src.config import required_env, required_int
 from src.exceptions import DomainError
-from src.interfaces.email_sender import IEmailSender
+from src.protocols.email_sender import EmailSenderProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class EmailError(DomainError):
     status_code = 502
 
 
-class SmtpEmailSender(IEmailSender):
+class SmtpEmailSender:
     """Sends plain-text email over SMTP using the stdlib. All connection details
     come from the environment — never hardcoded. Port 465 uses implicit SSL;
     any other port uses STARTTLS (the common case for 587)."""
@@ -52,5 +52,5 @@ class SmtpEmailSender(IEmailSender):
             raise EmailError("Could not send the email. Try again later.") from exc
 
 
-def get_email_sender() -> IEmailSender:
+def get_email_sender() -> EmailSenderProtocol:
     return SmtpEmailSender()

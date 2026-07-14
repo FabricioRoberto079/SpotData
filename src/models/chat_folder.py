@@ -1,19 +1,20 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
+
+if TYPE_CHECKING:
+    from src.models.chat import Chat
 
 
-class ChatFolder(BaseModel):
+class ChatFolder(TimestampedBase):
     __tablename__ = "chat_folders"
 
     name: Mapped[str] = mapped_column(String, nullable=False)
-    parent_id: Mapped[str | None] = mapped_column(
-        ForeignKey("chat_folders.id"), nullable=True
-    )
-    owner_id: Mapped[str | None] = mapped_column(
-        ForeignKey("users.id"), nullable=True
-    )
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("chat_folders.id"), nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     parent: Mapped["ChatFolder | None"] = relationship(
         back_populates="children", remote_side="ChatFolder.id"

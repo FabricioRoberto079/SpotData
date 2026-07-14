@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Protocol
 
 _whitespace = re.compile(r"\s+")
 
@@ -25,34 +24,25 @@ def question_key(question: str, category_id: str | None = None) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
-class IQaCache(ABC):
-    @abstractmethod
+class QaCacheProtocol(Protocol):
+    def generation(self) -> int: ...
     def lookup_exact(
         self, question: str, category_id: str | None = None
     ) -> dict[str, Any] | None: ...
-
-    @abstractmethod
     def lookup_semantic(
         self,
         question: str,
         embedding: list[float],
         category_id: str | None = None,
     ) -> dict[str, Any] | None: ...
-
-    @abstractmethod
     def put(
         self,
         question: str,
         embedding: list[float],
         payload: dict[str, Any],
         category_id: str | None = None,
+        generation: int | None = None,
     ) -> None: ...
-
-    @abstractmethod
     def invalidate_all(self) -> None: ...
-
-    @abstractmethod
     def invalidate_category(self, category_id: str | None) -> None: ...
-
-    @abstractmethod
     def stats(self) -> dict[str, Any]: ...

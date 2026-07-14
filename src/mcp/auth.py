@@ -1,18 +1,12 @@
-import jwt
+from src.auth import authenticate_token
+from src.models.user import User
 
-from src.config import required_env
 
+def resolve_user_from_token(token: str) -> User:
+    """Validate the JWT and confirm the user still exists and is active.
 
-def resolve_user_id_from_token(token: str) -> str:
-    secret = required_env("JWT_SECRET")
-    algorithm = required_env("JWT_ALGORITHM")
-    try:
-        payload = jwt.decode(token, secret, algorithms=[algorithm])
-    except jwt.ExpiredSignatureError as exc:
-        raise RuntimeError("JWT expired.") from exc
-    except jwt.InvalidTokenError as exc:
-        raise RuntimeError(f"JWT invalid: {exc}") from exc
-    user_id = payload.get("sub")
-    if not user_id:
-        raise RuntimeError("JWT has no subject claim.")
-    return user_id
+    Mirrors the HTTP auth path (`src.auth.authenticate_token`) so a disabled or
+    deleted user's still-valid token stops working on the MCP surface too,
+    instead of only being blocked on the REST endpoints.
+    """
+    return authenticate_token(token)

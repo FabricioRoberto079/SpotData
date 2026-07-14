@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text
@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.config import embedding_dimension
-from src.models.base_model import Base
+from src.models.base import Base
 
 
 class QaCacheEntry(Base):
@@ -17,9 +17,6 @@ class QaCacheEntry(Base):
     )
 
     question_key: Mapped[str] = mapped_column(String, primary_key=True)
-    # Retrieval scope this answer was computed for; NULL = the global,
-    # search-everything chats. Lookups filter on it so a scoped chat never reads
-    # back another category's answer. The scope is also folded into question_key.
     category_id: Mapped[str | None] = mapped_column(
         ForeignKey("categories.id", ondelete="CASCADE"), nullable=True
     )
@@ -34,5 +31,5 @@ class QaCacheEntry(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )

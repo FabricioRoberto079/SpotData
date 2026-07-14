@@ -2,13 +2,12 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.exceptions import ConflictError, NotFoundError
-from src.interfaces.folder_service import IFolderService
 from src.models.chat_folder import ChatFolder
 
 
-class ChatFolderService(IFolderService):
+class ChatFolderService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -34,19 +33,13 @@ class ChatFolderService(IFolderService):
                 roots.append(node)
         return roots
 
-    def _ensure_parent_owned(
-        self, parent_id: str | None, owner_id: str | None
-    ) -> None:
+    def _ensure_parent_owned(self, parent_id: str | None, owner_id: str | None) -> None:
         if parent_id is None:
             return
         parent = self._session.get(ChatFolder, parent_id)
         if parent is None:
             raise NotFoundError(f"Parent folder not found: {parent_id}")
-        if (
-            owner_id is not None
-            and parent.owner_id is not None
-            and parent.owner_id != owner_id
-        ):
+        if owner_id is not None and parent.owner_id is not None and parent.owner_id != owner_id:
             raise NotFoundError(f"Parent folder not found: {parent_id}")
 
     def _load_owned(self, folder_id: str, owner_id: str | None) -> ChatFolder:
@@ -55,11 +48,7 @@ class ChatFolderService(IFolderService):
         folder = self._session.get(ChatFolder, folder_id)
         if folder is None:
             raise NotFoundError(f"Folder not found: {folder_id}")
-        if (
-            owner_id is not None
-            and folder.owner_id is not None
-            and folder.owner_id != owner_id
-        ):
+        if owner_id is not None and folder.owner_id is not None and folder.owner_id != owner_id:
             raise NotFoundError(f"Folder not found: {folder_id}")
         return folder
 
@@ -79,28 +68,22 @@ class ChatFolderService(IFolderService):
         parent_id: str | None = None,
         owner_id: str | None = None,
     ) -> dict:
-        try:
+        with transaction(self._session):
             self._ensure_parent_owned(parent_id, owner_id)
             folder = ChatFolder(name=name, parent_id=parent_id, owner_id=owner_id)
             self._session.add(folder)
-            self._session.commit()
-            self._session.refresh(folder)
-            return self._serialize(folder)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(folder)
+        return self._serialize(folder)
 
     def list_tree(self, owner_id: str | None = None) -> list[dict]:
         stmt = select(ChatFolder)
         if owner_id is not None:
             stmt = stmt.where(ChatFolder.owner_id == owner_id)
         folders = self._session.execute(stmt).scalars().all()
-        return self._build_tree(folders)
+        return self._build_tree(list(folders))
 
-    def update(
-        self, folder_id: str, fields: dict, owner_id: str | None = None
-    ) -> dict:
-        try:
+    def update(self, folder_id: str, fields: dict, owner_id: str | None = None) -> dict:
+        with transaction(self._session):
             folder = self._load_owned(folder_id, owner_id)
 
             if "name" in fields and fields["name"] is not None:
@@ -113,53 +96,30 @@ class ChatFolderService(IFolderService):
                 if new_parent_id is not None:
                     self._ensure_parent_owned(new_parent_id, owner_id)
                     if self._is_descendant(new_parent_id, folder_id):
-                        raise ConflictError(
-                            "Cannot move into a descendant (would create a cycle)."
-                        )
+                        raise ConflictError("Cannot move into a descendant (would create a cycle).")
                 folder.parent_id = new_parent_id
-
-            self._session.commit()
-            self._session.refresh(folder)
-            return self._serialize(folder)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(folder)
+        return self._serialize(folder)
 
     def delete(self, folder_id: str, owner_id: str | None = None) -> None:
-        try:
+        with transaction(self._session):
             folder = self._load_owned(folder_id, owner_id)
             self._delete_recursive(folder, owner_id)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
-    def _delete_recursive(
-        self, folder: ChatFolder, owner_id: str | None
-    ) -> None:
-        if (
-            owner_id is not None
-            and folder.owner_id is not None
-            and folder.owner_id != owner_id
-        ):
+    def _delete_recursive(self, folder: ChatFolder, owner_id: str | None) -> None:
+        if owner_id is not None and folder.owner_id is not None and folder.owner_id != owner_id:
             raise ConflictError(
                 f"Refusing to cascade-delete folder {folder.id} owned by another user."
             )
         children = (
-            self._session.execute(
-                select(ChatFolder).where(ChatFolder.parent_id == folder.id)
-            )
+            self._session.execute(select(ChatFolder).where(ChatFolder.parent_id == folder.id))
             .scalars()
             .all()
         )
         for child in children:
             self._delete_recursive(child, owner_id)
         for chat in list(folder.chats):
-            if (
-                owner_id is not None
-                and chat.user_id is not None
-                and chat.user_id != owner_id
-            ):
+            if owner_id is not None and chat.user_id is not None and chat.user_id != owner_id:
                 raise ConflictError(
                     f"Refusing to cascade-delete chat {chat.id} owned by another user."
                 )
@@ -169,5 +129,5 @@ class ChatFolderService(IFolderService):
 
 def get_chat_folder_service(
     session: Session = Depends(get_session),
-) -> IFolderService:
+) -> ChatFolderService:
     return ChatFolderService(session)

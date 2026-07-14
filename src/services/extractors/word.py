@@ -7,7 +7,6 @@ from pathlib import Path
 from docx import Document
 
 from src.exceptions import ValidationError
-from src.interfaces.content_extractor import IContentExtractor
 
 DOCX_MAGIC = b"PK\x03\x04"
 DOC_MAGIC = b"\xd0\xcf\x11\xe0"
@@ -24,15 +23,13 @@ _TAG_LRPB = f"{{{_W_NS}}}lastRenderedPageBreak"
 _ATTR_TYPE = f"{{{_W_NS}}}type"
 
 
-class WordExtractor(IContentExtractor):
+class WordExtractor:
     def from_bytes(self, data: bytes) -> str:
         if data.startswith(DOCX_MAGIC):
             return self._extract_docx(data)
         if data.startswith(DOC_MAGIC):
             return self._extract_doc(data)
-        raise ValidationError(
-            "Word format not recognized. Expected .doc or .docx."
-        )
+        raise ValidationError("Word format not recognized. Expected .doc or .docx.")
 
     def pages_from_bytes(self, data: bytes) -> list[str] | None:
         if not data.startswith(DOCX_MAGIC):
@@ -75,9 +72,7 @@ class WordExtractor(IContentExtractor):
             if tag == _TAG_P:
                 for elem in block.iter():
                     et = elem.tag
-                    if et == _TAG_LRPB:
-                        new_page()
-                    elif et == _TAG_BR and elem.get(_ATTR_TYPE) == "page":
+                    if et == _TAG_LRPB or et == _TAG_BR and elem.get(_ATTR_TYPE) == "page":
                         new_page()
                     elif et == _TAG_T:
                         emit(elem.text or "")

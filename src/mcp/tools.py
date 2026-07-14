@@ -4,7 +4,7 @@ from mcp.server.fastmcp import Context
 
 from src.data.postgres_client import SessionLocal
 from src.integrations.llm import get_llm_client
-from src.mcp.auth import resolve_user_id_from_token
+from src.mcp.auth import resolve_user_from_token
 from src.mcp.server import mcp_server
 from src.services.chat_service import ChatService
 from src.services.qa_cache import get_qa_cache
@@ -113,5 +113,5 @@ async def ask_question(
         `answer` is an empty string and `citations` is an empty list.
     """
     token = _extract_bearer(ctx)
-    user_id = resolve_user_id_from_token(token)
-    return await _ask(question, chat_id, user_id)
+    user = resolve_user_from_token(token)
+    return await _ask(question, chat_id, user.id)

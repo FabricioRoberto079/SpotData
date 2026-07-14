@@ -6,33 +6,39 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  pytest:
-    name: pytest
-    runs-on: ubuntu-latest
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
+env:
+  POSTGRES_USER: ci
+  POSTGRES_PASSWORD: ci
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ci
+  EMBEDDING_DIMENSION: "4"
+  JWT_SECRET: ci-secret
+  JWT_ALGORITHM: HS256
+  JWT_EXPIRATION_MINUTES: "60"
+  CORS_ORIGINS: "http://localhost:3000"
+  LOG_LEVEL: INFO
+
+jobs:
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.txt
-
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run pytest
-        env:
-          POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: "5432"
-          POSTGRES_DB: ci
-          LOG_LEVEL: INFO
-          CORS_ORIGINS: "*"
-        run: pytest -q
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Pytest
+        run: pytest --cov=src --cov-report=term-missing

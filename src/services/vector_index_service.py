@@ -1,5 +1,7 @@
 import logging
 import re
+from collections.abc import Sequence
+from typing import Any
 
 from fastapi import Depends
 from sqlalchemy import delete, func, literal_column, or_, select, update
@@ -8,12 +10,11 @@ from sqlalchemy.orm import Session
 from src.data.postgres_client import get_session
 from src.exceptions import ValidationError
 from src.integrations.llm import LlmClient, LlmError, get_llm_client
-from src.interfaces.text_chunker import ITextChunker
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.document_version import DocumentVersion
 from src.models.knowledge_document import KnowledgeDocument
 from src.models.vector_chunk import VectorChunk
-from src.services.text_chunker import get_text_chunker
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
+from src.services.text_chunker import TextChunker, get_text_chunker
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,11 @@ RRF_K = 60
 TS_LANGUAGE = "portuguese"
 
 
-class VectorIndexService(IVectorIndexService):
+class VectorIndexService:
     def __init__(
         self,
         session: Session,
-        text_chunker: ITextChunker,
+        text_chunker: TextChunker,
         llm_client: LlmClient,
     ) -> None:
         self._session = session
@@ -48,9 +49,7 @@ class VectorIndexService(IVectorIndexService):
             )
         return chunks, embeddings
 
-    def prepare_paged(
-        self, pages: list[str]
-    ) -> tuple[list[str], list[list[float]], list[int]]:
+    def prepare_paged(self, pages: list[str]) -> tuple[list[str], list[list[float]], list[int]]:
         chunks: list[str] = []
         pages_per_chunk: list[int] = []
         for page_no, page_text in enumerate(pages, start=1):
@@ -80,7 +79,7 @@ class VectorIndexService(IVectorIndexService):
         content_type: str,
         chunks: list[str],
         embeddings: list[list[float]],
-        pages_per_chunk: list[int | None] | None = None,
+        pages_per_chunk: list[int] | None = None,
         category_id: str | None = None,
     ) -> int:
         self._session.execute(
@@ -126,9 +125,7 @@ class VectorIndexService(IVectorIndexService):
         )
 
     def purge_document(self, document_id: str) -> None:
-        self._session.execute(
-            delete(VectorChunk).where(VectorChunk.document_id == document_id)
-        )
+        self._session.execute(delete(VectorChunk).where(VectorChunk.document_id == document_id))
 
     def search(
         self,
@@ -171,11 +168,11 @@ class VectorIndexService(IVectorIndexService):
     ) -> list[dict]:
         distance = VectorChunk.embedding.cosine_distance(embedding)
         stmt = self._scope(self._search_select(distance), category_id)
-        rows = self._session.execute(
-            stmt.order_by(distance.asc()).limit(n_results)
-        ).all()
-        return [self._row_to_dict(chunk, float(dist), doc_name, created_at)
-                for chunk, dist, doc_name, created_at in rows]
+        rows = self._session.execute(stmt.order_by(distance.asc()).limit(n_results)).all()
+        return [
+            self._row_to_dict(chunk, float(dist), doc_name, created_at)
+            for chunk, dist, doc_name, created_at in rows
+        ]
 
     def _search_hybrid(
         self,
@@ -196,10 +193,10 @@ class VectorIndexService(IVectorIndexService):
             .limit(HYBRID_CANDIDATE_K)
         ).all()
 
-        bm25_rows: list = []
+        bm25_rows: Sequence[Any] = []
         tsquery_expr = self._build_or_tsquery(query)
         if tsquery_expr is not None:
-            tsv = literal_column("tsv")
+            tsv: Any = literal_column("tsv")
             tsquery = func.to_tsquery(TS_LANGUAGE, tsquery_expr)
             rank = func.ts_rank_cd(tsv, tsquery)
             bm25_rows = self._session.execute(
@@ -228,11 +225,8 @@ class VectorIndexService(IVectorIndexService):
 
         top_ids = sorted(rrf_scores, key=lambda i: -rrf_scores[i])[:n_results]
 
-        rows = self._session.execute(
-            self._search_select().where(VectorChunk.id.in_(top_ids))
-        ).all()
-        by_id = {chunk.id: (chunk, doc_name, created_at)
-                 for chunk, doc_name, created_at in rows}
+        rows = self._session.execute(self._search_select().where(VectorChunk.id.in_(top_ids))).all()
+        by_id = {chunk.id: (chunk, doc_name, created_at) for chunk, doc_name, created_at in rows}
 
         return [
             self._row_to_dict(
@@ -293,7 +287,7 @@ class VectorIndexService(IVectorIndexService):
 
 def get_vector_index_service(
     session: Session = Depends(get_session),
-    text_chunker: ITextChunker = Depends(get_text_chunker),
+    text_chunker: TextChunker = Depends(get_text_chunker),
     llm: LlmClient = Depends(get_llm_client),
-) -> IVectorIndexService:
+) -> VectorIndexServiceProtocol:
     return VectorIndexService(session, text_chunker, llm)

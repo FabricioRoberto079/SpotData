@@ -1,0 +1,38 @@
+[project]
+name = "spotdata"
+version = "0.1.0"
+description = "SpotData — ingest, organize and query documents using RAG (FastAPI + Postgres/pgvector)."
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", "alembic/versions", "evals"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "B", "UP", "C4", "SIM"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E402"]
+"alembic/env.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+"src/models/*" = ["F821"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "main.py"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+exclude = ["alembic/", "evals/", "tests/"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "alembic/*", "evals/*"]

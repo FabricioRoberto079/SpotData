@@ -2,10 +2,8 @@ import io
 
 from pypdf import PdfReader
 
-from src.interfaces.content_extractor import IContentExtractor
 
-
-class PdfExtractor(IContentExtractor):
+class PdfExtractor:
     @staticmethod
     def _pages(reader: PdfReader) -> list[str]:
         return [(p.extract_text() or "").strip() for p in reader.pages]

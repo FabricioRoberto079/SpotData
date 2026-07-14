@@ -3,19 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.enums.response_status import ResponseStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.integrations.llm import LlmClient, LlmError, get_llm_client
-from src.interfaces.chat_service import IChatService
-from src.interfaces.qa_cache import IQaCache
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.category import Category
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
@@ -24,7 +21,10 @@ from src.models.evidence_citation import EvidenceCitation
 from src.models.knowledge_document import KnowledgeDocument
 from src.models.query import Query
 from src.models.response import Response as ResponseModel
+from src.prompts.condense_prompt import CondensedQuery, build_condense_messages
 from src.prompts.rag_prompt import RagAnswer, build_messages
+from src.protocols.qa_cache import QaCacheProtocol
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
 from src.services.qa_cache import get_qa_cache
 from src.services.vector_index_service import get_vector_index_service
 
@@ -33,17 +33,18 @@ logger = logging.getLogger(__name__)
 CHAT_HISTORY_LIMIT = 10
 CHAT_TITLE_MAX_CHARS = 60
 RAG_TOP_K = 10
+CONDENSE_MAX_TOKENS = 200
 
 MIN_CITATION_CONFIDENCE = 0.6
 
 
-class ChatService(IChatService):
+class ChatService:
     def __init__(
         self,
         session: Session,
-        vector_index: IVectorIndexService,
+        vector_index: VectorIndexServiceProtocol,
         llm_client: LlmClient,
-        cache: IQaCache,
+        cache: QaCacheProtocol,
     ) -> None:
         self._session = session
         self._vector_index = vector_index
@@ -61,19 +62,13 @@ class ChatService(IChatService):
             "created_at": chat.created_at.isoformat() if chat.created_at else None,
         }
 
-    def _ensure_folder_owned(
-        self, folder_id: str | None, user_id: str | None
-    ) -> None:
+    def _ensure_folder_owned(self, folder_id: str | None, user_id: str | None) -> None:
         if folder_id is None:
             return
         folder = self._session.get(ChatFolder, folder_id)
         if folder is None:
             raise NotFoundError(f"Chat folder not found: {folder_id}")
-        if (
-            user_id is not None
-            and folder.owner_id is not None
-            and folder.owner_id != user_id
-        ):
+        if user_id is not None and folder.owner_id is not None and folder.owner_id != user_id:
             raise NotFoundError(f"Chat folder not found: {folder_id}")
 
     def _load_owned(self, chat_id: str, user_id: str | None) -> Chat:
@@ -86,9 +81,7 @@ class ChatService(IChatService):
             raise NotFoundError(f"Chat not found: {chat_id}")
         return chat
 
-    def list(
-        self, folder_id: str | None = None, user_id: str | None = None
-    ) -> list[dict]:
+    def list_chats(self, folder_id: str | None = None, user_id: str | None = None) -> list[dict]:
         stmt = select(Chat)
         if folder_id is not None:
             stmt = stmt.where(Chat.folder_id == folder_id)
@@ -108,9 +101,7 @@ class ChatService(IChatService):
         stmt = (
             select(Query)
             .where(Query.chat_id == chat_id)
-            .options(
-                selectinload(Query.response).selectinload(ResponseModel.citations)
-            )
+            .options(selectinload(Query.response).selectinload(ResponseModel.citations))
             .order_by(Query.created_at.asc())
         )
         queries = self._session.execute(stmt).scalars().all()
@@ -123,11 +114,15 @@ class ChatService(IChatService):
                 document_ids.add(c.document_id)
         docs_by_id: dict[str, KnowledgeDocument] = {}
         if document_ids:
-            doc_rows = self._session.execute(
-                select(KnowledgeDocument)
-                .options(selectinload(KnowledgeDocument.versions))
-                .where(KnowledgeDocument.id.in_(document_ids))
-            ).scalars().all()
+            doc_rows = (
+                self._session.execute(
+                    select(KnowledgeDocument)
+                    .options(selectinload(KnowledgeDocument.versions))
+                    .where(KnowledgeDocument.id.in_(document_ids))
+                )
+                .scalars()
+                .all()
+            )
             docs_by_id = {d.id: d for d in doc_rows}
 
         messages: list[dict] = []
@@ -152,9 +147,7 @@ class ChatService(IChatService):
                     "role": "assistant",
                     "content": response.response_text,
                     "created_at": (
-                        response.created_at.isoformat()
-                        if response.created_at
-                        else None
+                        response.created_at.isoformat() if response.created_at else None
                     ),
                     "status": response.status,
                     "citations": [
@@ -169,14 +162,11 @@ class ChatService(IChatService):
     @staticmethod
     def _serialize_citation_with_doc(
         citation: EvidenceCitation,
-        doc: "KnowledgeDocument | None",
+        doc: KnowledgeDocument | None,
+        version: DocumentVersion | None = None,
     ) -> dict:
-        version = None
-        if doc is not None and citation.document_version_id is not None:
-            version = next(
-                (v for v in doc.versions if v.id == citation.document_version_id),
-                None,
-            )
+        if version is None and doc is not None and citation.document_version_id is not None:
+            version = doc.find_version_by_id(citation.document_version_id)
         return {
             "document_id": citation.document_id,
             "document_version_id": version.id if version else None,
@@ -185,77 +175,40 @@ class ChatService(IChatService):
             "page": citation.page,
             "excerpt": citation.used_excerpt,
             "confidence_score": citation.confidence_score,
-            "download_url": (
-                f"/documents/{citation.document_id}/download" if doc else None
-            ),
+            "download_url": (f"/documents/{citation.document_id}/download" if doc else None),
         }
 
-    def update(
-        self, chat_id: str, fields: dict, user_id: str | None = None
-    ) -> dict:
-        try:
+    def update(self, chat_id: str, fields: dict, user_id: str | None = None) -> dict:
+        with transaction(self._session):
             chat = self._load_owned(chat_id, user_id)
             if "folder_id" in fields:
                 self._ensure_folder_owned(fields["folder_id"], user_id)
                 chat.folder_id = fields["folder_id"]
             if "title" in fields and fields["title"] is not None:
                 chat.title = fields["title"]
-            self._session.commit()
-            self._session.refresh(chat)
-            return self._serialize(chat)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(chat)
+        return self._serialize(chat)
 
     def delete(self, chat_id: str, user_id: str | None = None) -> None:
-        try:
+        with transaction(self._session):
             chat = self._load_owned(chat_id, user_id)
             self._session.delete(chat)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
     def _resolve_version(
         self, document_id: str, version_number: int | None
-    ) -> "DocumentVersion | None":
+    ) -> DocumentVersion | None:
         doc = self._session.get(KnowledgeDocument, document_id)
-        if doc is None or not doc.versions:
+        if doc is None:
             return None
-        if version_number is None:
-            return max(doc.versions, key=lambda v: v.version_number)
-        for v in doc.versions:
-            if v.version_number == version_number:
-                return v
-        return None
+        return doc.find_version(version_number)
 
     def _serialize_citation(
         self,
         citation: EvidenceCitation,
-        version: "DocumentVersion | None" = None,
+        version: DocumentVersion | None = None,
     ) -> dict:
         doc = self._session.get(KnowledgeDocument, citation.document_id)
-        if version is None and citation.document_version_id is not None:
-            version = next(
-                (
-                    v
-                    for v in (doc.versions if doc else [])
-                    if v.id == citation.document_version_id
-                ),
-                None,
-            )
-        return {
-            "document_id": citation.document_id,
-            "document_version_id": version.id if version else None,
-            "version_number": version.version_number if version else None,
-            "file_name": doc.file_name if doc else None,
-            "page": citation.page,
-            "excerpt": citation.used_excerpt,
-            "confidence_score": citation.confidence_score,
-            "download_url": (
-                f"/documents/{citation.document_id}/download" if doc else None
-            ),
-        }
+        return self._serialize_citation_with_doc(citation, doc, version)
 
     @staticmethod
     def _clamp_confidence(raw) -> float | None:
@@ -349,6 +302,7 @@ class ChatService(IChatService):
         stmt = (
             select(Query)
             .where(Query.chat_id == chat_id)
+            .options(selectinload(Query.response))
             .order_by(Query.created_at.desc())
             .limit(CHAT_HISTORY_LIMIT)
         )
@@ -360,26 +314,32 @@ class ChatService(IChatService):
             if q.response is None or not q.response.response_text:
                 continue
             history.append({"role": "user", "content": q.question})
-            history.append(
-                {"role": "assistant", "content": q.response.response_text}
-            )
+            history.append({"role": "assistant", "content": q.response.response_text})
         return history
 
     @staticmethod
     def _is_valid_cached_payload(payload: dict) -> bool:
+        """Serve-side contract for cached payloads: grounded SUCCESS answers only,
+        with every citation carrying the fields `_serve_cached_stream` replays.
+        The shape check matters because L2 payloads are plain JSON persisted in
+        Postgres — they outlive deploys and schema evolution."""
         if payload.get("status") != ResponseStatus.SUCCESS.value:
             return False
         answer = (payload.get("answer") or "").strip()
         if not answer:
             return False
-        if not payload.get("citations"):
+        citations = payload.get("citations")
+        if not isinstance(citations, list) or not citations:
             return False
-        return True
+        return all(
+            isinstance(c, dict)
+            and isinstance(c.get("document_id"), str)
+            and isinstance(c.get("excerpt"), str)
+            for c in citations
+        )
 
     @staticmethod
-    def _build_stream_cache_payload(
-        question: str, answer: str, citations: list[dict]
-    ) -> dict:
+    def _build_stream_cache_payload(question: str, answer: str, citations: list[dict]) -> dict:
         return {
             "question": question,
             "answer": answer,
@@ -405,10 +365,8 @@ class ChatService(IChatService):
         started: float,
         category_id: str | None = None,
     ) -> AsyncIterator[dict]:
-        try:
-            chat_id = self._resolve_or_create_chat(
-                chat_id, question, user_id, category_id
-            )
+        with transaction(self._session):
+            chat_id = self._resolve_or_create_chat(chat_id, question, user_id, category_id)
             query_row = Query(user_id=user_id, chat_id=chat_id, question=question)
             self._session.add(query_row)
             self._session.flush()
@@ -438,9 +396,7 @@ class ChatService(IChatService):
                     confidence = self._clamp_confidence(c.get("confidence_score"))
                     if confidence is None:
                         continue
-                    version = self._resolve_version(
-                        c["document_id"], c.get("version_number")
-                    )
+                    version = self._resolve_version(c["document_id"], c.get("version_number"))
                     citation_row = EvidenceCitation(
                         response_id=response_row.id,
                         document_id=c["document_id"],
@@ -468,9 +424,6 @@ class ChatService(IChatService):
                 "status": response_row.status,
                 "time_ms": elapsed,
             }
-        except Exception:
-            self._session.rollback()
-            raise
 
     async def _finalize_insufficient(
         self,
@@ -519,6 +472,46 @@ class ChatService(IChatService):
             citations_payload.append(payload)
         return citations_payload
 
+    async def _condense_question(self, history: list[dict], question: str) -> str:
+        """Rewrite a follow-up into a self-contained retrieval query using the
+        chat history, so questions like "e o segundo caso?" reach the embedding
+        and the hybrid search with real semantic signal. Degrades gracefully:
+        any failure or empty rewrite falls back to the raw question."""
+        messages = build_condense_messages(history, question)
+        last: dict = {}
+        try:
+            async for partial in self._llm.chat_stream_structured(
+                messages, CondensedQuery, max_tokens=CONDENSE_MAX_TOKENS
+            ):
+                last = partial
+        except LlmError as exc:
+            logger.warning(
+                "question condense failed (%s); searching with the raw question", exc.kind
+            )
+            return question
+        rewritten = last.get("standalone_question")
+        if isinstance(rewritten, str) and rewritten.strip():
+            return rewritten.strip()
+        return question
+
+    def _persist_interrupted(
+        self, response_row: ResponseModel, partial_answer: str, started: float
+    ) -> None:
+        """The client went away mid-stream (GeneratorExit/CancelledError): persist
+        what was actually delivered so the turn doesn't silently vanish from the
+        chat history. A partial answer is a truthful grounded prefix the user saw,
+        so it keeps SUCCESS; with nothing delivered the placeholder stays ERROR."""
+        response_id = response_row.id
+        elapsed = int((time.perf_counter() - started) * 1000)
+        try:
+            with transaction(self._session):
+                response_row.response_text = partial_answer
+                if partial_answer:
+                    response_row.status = ResponseStatus.SUCCESS.value
+                response_row.time_ms = elapsed
+        except Exception:
+            logger.exception("failed to persist interrupted stream %s", response_id)
+
     async def ask_stream(
         self,
         question: str,
@@ -532,44 +525,48 @@ class ChatService(IChatService):
 
         started = time.perf_counter()
 
-        # Retrieval is scoped to the chat's category (chosen at creation). For a new
-        # chat the requested category_id is used and stored on it.
         scope_category_id = self._resolve_scope_category(chat_id, category_id, user_id)
 
-        # The Q&A cache is scoped to the chat's category: an answer is only ever
-        # reused for the exact same scope (``None`` = the global, search-everything
-        # chats). This keeps category-restricted answers from leaking into other
-        # categories while still letting scoped chats benefit from the cache.
+        history: list[dict] = []
+        search_question = question
+        if chat_id is not None:
+            history = self._load_chat_history(chat_id)
+            if history:
+                search_question = await self._condense_question(history, question)
+
         question_embedding: list[float] | None = None
-        cached = self._cache.lookup_exact(question, scope_category_id)
+        cached = self._cache.lookup_exact(search_question, scope_category_id)
+        if cached is not None and not self._is_valid_cached_payload(cached):
+            cached = None
         if cached is None:
-            embeds = await asyncio.to_thread(self._llm.embed, [question])
+            embeds = await asyncio.to_thread(self._llm.embed, [search_question])
             question_embedding = embeds[0]
             cached = await asyncio.to_thread(
                 self._cache.lookup_semantic,
-                question,
+                search_question,
                 question_embedding,
                 scope_category_id,
             )
-        if cached is not None and self._is_valid_cached_payload(cached):
+            if cached is not None and not self._is_valid_cached_payload(cached):
+                cached = None
+        if cached is not None:
             async for event in self._serve_cached_stream(
                 question, cached, user_id, chat_id, started, scope_category_id
             ):
                 yield event
             return
 
+        cache_generation = self._cache.generation()
         contexts = await asyncio.to_thread(
             self._vector_index.search,
-            question,
+            search_question,
             RAG_TOP_K,
             question_embedding,
             scope_category_id,
         )
 
-        try:
-            chat_id = self._resolve_or_create_chat(
-                chat_id, question, user_id, scope_category_id
-            )
+        with transaction(self._session):
+            chat_id = self._resolve_or_create_chat(chat_id, question, user_id, scope_category_id)
 
             query_row = Query(user_id=user_id, chat_id=chat_id, question=question)
             self._session.add(query_row)
@@ -578,135 +575,127 @@ class ChatService(IChatService):
             response_row = ResponseModel(
                 query_id=query_row.id,
                 response_text="",
-                status=ResponseStatus.SUCCESS.value,
+                status=ResponseStatus.ERROR.value,
                 time_ms=0,
             )
             self._session.add(response_row)
             self._session.flush()
+        response_id = response_row.id
 
-            yield {
-                "type": "meta",
-                "chat_id": chat_id,
-                "query_id": query_row.id,
-                "response_id": response_row.id,
-            }
+        yield {
+            "type": "meta",
+            "chat_id": chat_id,
+            "query_id": query_row.id,
+            "response_id": response_id,
+        }
 
-            if not contexts:
-                async for event in self._finalize_insufficient(response_row, started):
-                    yield event
-                return
+        if not contexts:
+            async for event in self._finalize_insufficient(response_row, started):
+                yield event
+            return
 
-            history = self._load_chat_history(chat_id)
-            rag_messages = build_messages(question, contexts)
-            if history:
-                rag_messages = [rag_messages[0], *history, rag_messages[1]]
+        rag_messages = build_messages(question, contexts, history)
 
-            answer_parts: list[str] = []
-            prev_answer = ""
-            last_partial: dict | None = None
-            citations_processed = False
-            citations_emitted = False
-            citations_payload: list[dict] = []
+        answer_parts: list[str] = []
+        prev_answer = ""
+        last_partial: dict | None = None
+        citations_processed = False
+        citations_emitted = False
+        citations_payload: list[dict] = []
 
-            def _to_partial_dict(obj: Any) -> dict:
-                if isinstance(obj, dict):
-                    return obj
-                if hasattr(obj, "model_dump"):
-                    return obj.model_dump()
-                return {}
+        try:
+            async for snapshot in self._llm.chat_stream_structured(rag_messages, RagAnswer):
+                last_partial = snapshot
 
-            try:
-                async for partial in self._llm.chat_stream_structured(
-                    rag_messages, RagAnswer
-                ):
-                    snapshot = _to_partial_dict(partial)
-                    last_partial = snapshot
-
-                    if not citations_processed and "answer" in snapshot:
-                        raw_citations = snapshot.get("citations") or []
+                if not citations_processed and "answer" in snapshot:
+                    raw_citations = snapshot.get("citations") or []
+                    with transaction(self._session):
                         citations_payload = self._build_and_persist_citations(
-                            raw_citations, contexts, response_row.id
+                            raw_citations, contexts, response_id
                         )
-                        citations_processed = True
-                        if not citations_payload:
-                            break
-                        yield {"type": "citations", "citations": citations_payload}
-                        citations_emitted = True
+                    citations_processed = True
+                    if not citations_payload:
+                        break
+                    yield {"type": "citations", "citations": citations_payload}
+                    citations_emitted = True
 
-                    current_answer = snapshot.get("answer")
-                    if not isinstance(current_answer, str):
-                        continue
-                    if len(current_answer) > len(prev_answer):
-                        delta = current_answer[len(prev_answer):]
-                        prev_answer = current_answer
-                        answer_parts.append(delta)
-                        yield {"type": "token", "content": delta}
-            except LlmError as exc:
-                elapsed = int((time.perf_counter() - started) * 1000)
-                response_row.response_text = (
-                    f"Error generating response ({exc.kind}): {exc.detail}"
-                )
+                current_answer = snapshot.get("answer")
+                if not isinstance(current_answer, str):
+                    continue
+                if len(current_answer) > len(prev_answer):
+                    delta = current_answer[len(prev_answer) :]
+                    prev_answer = current_answer
+                    answer_parts.append(delta)
+                    yield {"type": "token", "content": delta}
+        except LlmError as exc:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            with transaction(self._session):
+                response_row.response_text = f"Error generating response ({exc.kind}): {exc.detail}"
                 response_row.status = ResponseStatus.ERROR.value
                 response_row.time_ms = elapsed
-                self._session.commit()
-                logger.warning(
-                    "stream %s LLM failed kind=%s detail=%s",
-                    query_row.id,
-                    exc.kind,
-                    exc.detail,
-                )
-                yield {"type": "error", "kind": exc.kind, "message": exc.detail}
-                return
+            logger.warning(
+                "stream %s LLM failed kind=%s detail=%s",
+                query_row.id,
+                exc.kind,
+                exc.detail,
+            )
+            yield {"type": "error", "kind": exc.kind, "message": exc.detail}
+            return
+        except BaseException:
+            self._persist_interrupted(response_row, "".join(answer_parts), started)
+            raise
 
-            last_answer = "".join(answer_parts)
+        last_answer = "".join(answer_parts)
 
-            if not citations_processed:
-                raw_citations = (last_partial or {}).get("citations") or []
+        if not citations_processed:
+            raw_citations = (last_partial or {}).get("citations") or []
+            with transaction(self._session):
                 citations_payload = self._build_and_persist_citations(
-                    raw_citations, contexts, response_row.id
+                    raw_citations, contexts, response_id
                 )
-                citations_processed = True
+            citations_processed = True
 
-            if not last_answer and not citations_payload:
-                async for event in self._finalize_insufficient(
-                    response_row,
-                    started,
-                    skip_citations_event=citations_emitted,
-                ):
-                    yield event
-                return
+        if not last_answer or not citations_payload:
+            async for event in self._finalize_insufficient(
+                response_row,
+                started,
+                skip_citations_event=citations_emitted,
+            ):
+                yield event
+            return
 
+        elapsed = int((time.perf_counter() - started) * 1000)
+        with transaction(self._session):
             response_row.response_text = last_answer
             response_row.status = ResponseStatus.SUCCESS.value
-            elapsed = int((time.perf_counter() - started) * 1000)
             response_row.time_ms = elapsed
-            self._session.commit()
 
-            if not citations_emitted:
-                yield {"type": "citations", "citations": citations_payload}
-            yield {
-                "type": "done",
-                "status": response_row.status,
-                "time_ms": elapsed,
-            }
+        if not citations_emitted:
+            yield {"type": "citations", "citations": citations_payload}
+        yield {
+            "type": "done",
+            "status": ResponseStatus.SUCCESS.value,
+            "time_ms": elapsed,
+        }
 
-            if question_embedding is not None:
+        if question_embedding is not None:
+            payload = self._build_stream_cache_payload(
+                search_question, last_answer, citations_payload
+            )
+            if self._is_valid_cached_payload(payload):
                 self._cache.put(
-                    question,
+                    search_question,
                     question_embedding,
-                    self._build_stream_cache_payload(
-                        question, last_answer, citations_payload
-                    ),
+                    payload,
                     scope_category_id,
+                    generation=cache_generation,
                 )
-        except Exception:
-            self._session.rollback()
-            raise
+
 
 def get_chat_service(
     session: Session = Depends(get_session),
-    vector_index: IVectorIndexService = Depends(get_vector_index_service),
+    vector_index: VectorIndexServiceProtocol = Depends(get_vector_index_service),
     llm: LlmClient = Depends(get_llm_client),
-    cache: IQaCache = Depends(get_qa_cache),
-) -> IChatService:
+    cache: QaCacheProtocol = Depends(get_qa_cache),
+) -> ChatService:
     return ChatService(session, vector_index, llm, cache)

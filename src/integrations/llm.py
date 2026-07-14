@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain.embeddings import init_embeddings
@@ -50,9 +52,7 @@ def _resolve_embedding_spec(model: str | None) -> str:
 
 
 @lru_cache(maxsize=8)
-def _get_chat_model(
-    spec: str, temperature: float, max_tokens: int | None
-) -> BaseChatModel:
+def _get_chat_model(spec: str, temperature: float, max_tokens: int | None) -> BaseChatModel:
     try:
         kwargs: dict = {"temperature": temperature}
         if max_tokens is not None:
@@ -88,30 +88,31 @@ def _convert_messages(messages: list[dict]) -> list[BaseMessage]:
     return converted
 
 
+_CLASSIFY_RULES: tuple[tuple[tuple[str, ...], str, int, str], ...] = (
+    (("quota", "rate limit", "429"), "rate_limit", 429, "LLM rate limit reached."),
+    (
+        ("unauthorized", "permission", "401", "403", "api key", "authentication"),
+        "auth",
+        502,
+        "Invalid API key or no permission.",
+    ),
+    (("timeout", "deadline"), "timeout", 504, "Timeout calling LLM provider."),
+    (("not found", "404"), "model_not_found", 502, "Model not found on provider."),
+    (
+        ("content_filter", "content filter", "blocked"),
+        "content_filter",
+        502,
+        "Response blocked by content filter.",
+    ),
+    (("invalid", "400"), "bad_request", 400, "Invalid request: {exc}"),
+)
+
+
 def _classify(exc: Exception) -> LlmError:
-    msg = str(exc)
-    lower = msg.lower()
-    if "quota" in lower or "rate limit" in lower or "429" in lower:
-        return LlmError("rate_limit", 429, "LLM rate limit reached.", exc)
-    if (
-        "unauthorized" in lower
-        or "permission" in lower
-        or "401" in lower
-        or "403" in lower
-        or "api key" in lower
-        or "authentication" in lower
-    ):
-        return LlmError("auth", 502, "Invalid API key or no permission.", exc)
-    if "timeout" in lower or "deadline" in lower:
-        return LlmError("timeout", 504, "Timeout calling LLM provider.", exc)
-    if "not found" in lower or "404" in lower:
-        return LlmError("model_not_found", 502, "Model not found on provider.", exc)
-    if "content_filter" in lower or "content filter" in lower or "blocked" in lower:
-        return LlmError(
-            "content_filter", 502, "Response blocked by content filter.", exc
-        )
-    if "invalid" in lower or "400" in lower:
-        return LlmError("bad_request", 400, f"Invalid request: {exc}", exc)
+    lower = str(exc).lower()
+    for markers, kind, status, detail in _CLASSIFY_RULES:
+        if any(marker in lower for marker in markers):
+            return LlmError(kind, status, detail.format(exc=exc), exc)
     return LlmError("provider", 502, f"LLM provider error: {exc}", exc)
 
 
@@ -126,6 +127,39 @@ def _wrap(call: Callable):
         raise _classify(e) from e
 
 
+_RETRYABLE_KINDS = {"rate_limit", "timeout", "provider"}
+_EMBED_MAX_ATTEMPTS = 3
+_EMBED_BACKOFF_SECONDS = (0.5, 2.0)
+
+
+def _embed_with_retry(embeddings: Embeddings, texts: list[str]) -> list[list[float]]:
+    """Call embed_documents, retrying transient failures with backoff. A single
+    flaky 429/timeout no longer aborts a whole document ingestion."""
+    last_error: LlmError | None = None
+    for attempt in range(_EMBED_MAX_ATTEMPTS):
+        try:
+            return embeddings.embed_documents(list(texts))
+        except LlmError as err:
+            last_error = err
+            retryable = err.kind in _RETRYABLE_KINDS
+        except Exception as exc:
+            last_error = _classify(exc)
+            retryable = last_error.kind in _RETRYABLE_KINDS
+        if not retryable or attempt == _EMBED_MAX_ATTEMPTS - 1:
+            raise last_error
+        wait = _EMBED_BACKOFF_SECONDS[min(attempt, len(_EMBED_BACKOFF_SECONDS) - 1)]
+        logger.warning(
+            "Embedding call failed (%s); retrying in %.1fs (attempt %d/%d).",
+            last_error.kind,
+            wait,
+            attempt + 1,
+            _EMBED_MAX_ATTEMPTS,
+        )
+        time.sleep(wait)
+    assert last_error is not None
+    raise last_error
+
+
 class LlmClient:
     async def chat_stream_structured(
         self,
@@ -134,13 +168,13 @@ class LlmClient:
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[dict]:
+        """Stream cumulative snapshots of the structured response, always as
+        plain dicts — provider differences (dict partials on the OpenAI path,
+        Pydantic partials elsewhere) are normalized here."""
         spec = _resolve_chat_spec(model, structured=True)
         llm = _get_chat_model(spec, temperature, max_tokens)
 
-        # Pass schema as dict on the OpenAI path so langchain wires
-        # JsonOutputParser (partial dicts during astream) instead of the
-        # non-streaming Pydantic parser.
         schema_arg: Any = schema
         if spec.startswith("openai:") and isinstance(schema, type):
             fn = convert_to_openai_function(schema, strict=True)
@@ -163,7 +197,10 @@ class LlmClient:
 
         try:
             async for partial in structured.astream(converted):
-                yield partial
+                if isinstance(partial, dict):
+                    yield partial
+                elif hasattr(partial, "model_dump"):
+                    yield partial.model_dump()
         except LlmError:
             raise
         except Exception as e:
@@ -177,7 +214,7 @@ class LlmClient:
         if not texts:
             return []
         embeddings = _get_embeddings(_resolve_embedding_spec(model))
-        result = _wrap(lambda: embeddings.embed_documents(list(texts)))
+        result = _embed_with_retry(embeddings, texts)
         if not result or len(result) != len(texts):
             raise LlmError(
                 "empty",

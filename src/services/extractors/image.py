@@ -1,11 +1,12 @@
 import io
 
-from PIL import Image
 import pytesseract
+from PIL import Image
 
-from src.interfaces.content_extractor import IContentExtractor
 
-
-class ImageExtractor(IContentExtractor):
+class ImageExtractor:
     def from_bytes(self, data: bytes) -> str:
         return pytesseract.image_to_string(Image.open(io.BytesIO(data))).strip()
+
+    def pages_from_bytes(self, data: bytes) -> list[str] | None:
+        return None

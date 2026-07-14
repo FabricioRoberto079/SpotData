@@ -1,26 +1,17 @@
 from fastapi import UploadFile
 
-from src.enums.content_type import ContentType
-from src.enums.document_category import DocumentCategory
 from src.exceptions import ValidationError
-from src.interfaces.upload_strategy import IUploadStrategy, UploadPayload
+from src.protocols.upload_strategy import UploadPayload
 from src.services.upload_strategies._shared import (
+    FILE_EXTENSION_MAP,
     clean_optional,
     extract_ext,
     read_upload,
     validate_mime_for_ext,
 )
 
-_EXTENSION_MAP: dict[str, tuple[ContentType, DocumentCategory]] = {
-    ".pdf": (ContentType.PDF, DocumentCategory.DOCUMENTS),
-    ".doc": (ContentType.DOC, DocumentCategory.DOCUMENTS),
-    ".docx": (ContentType.DOC, DocumentCategory.DOCUMENTS),
-    ".txt": (ContentType.TEXTO, DocumentCategory.TEXT),
-    ".md": (ContentType.TEXTO, DocumentCategory.TEXT),
-}
 
-
-class FileUploadStrategy(IUploadStrategy):
+class FileUploadStrategy:
     async def build_payload(
         self,
         *,
@@ -32,11 +23,11 @@ class FileUploadStrategy(IUploadStrategy):
             raise ValidationError("Missing 'file' for file upload.")
         filename = file.filename or ""
         ext = extract_ext(filename)
-        mapping = _EXTENSION_MAP.get(ext)
+        mapping = FILE_EXTENSION_MAP.get(ext)
         if mapping is None:
             raise ValidationError(
                 f"Unsupported file extension '{ext}'. "
-                f"Accepted: {', '.join(sorted(_EXTENSION_MAP))}."
+                f"Accepted: {', '.join(sorted(FILE_EXTENSION_MAP))}."
             )
         content_type, category = mapping
         data = await read_upload(file)

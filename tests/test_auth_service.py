@@ -1,18 +1,17 @@
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
 
 from src.auth import verify_password
 from src.exceptions import UnauthorizedError
-from src.interfaces.email_sender import IEmailSender
 from src.models.password_reset_code import PasswordResetCode
 from src.models.user import User
 from src.services.auth_service import AuthService
 
 
-class FakeEmailSender(IEmailSender):
+class FakeEmailSender:
     def __init__(self):
         self.sent: list[dict] = []
 
@@ -60,7 +59,6 @@ def test_forgot_password_emails_a_code_for_a_known_user(session):
     code = _extract_code(sender.sent[0]["body"])
 
     stored = session.scalars(select(PasswordResetCode)).one()
-    # The code is stored hashed, never in clear text.
     assert stored.code_hash != code
     assert verify_password(code, stored.code_hash)
 
@@ -72,7 +70,6 @@ def test_requesting_a_new_code_invalidates_the_previous_one(session):
     service.request_password_reset("user@x.com")
     service.request_password_reset("user@x.com")
 
-    # Only the newest unused code survives.
     codes = session.scalars(select(PasswordResetCode)).all()
     assert len(codes) == 1
 
@@ -114,7 +111,6 @@ def test_reset_password_wrong_code_raises_and_counts_an_attempt(session):
 
     stored = session.scalars(select(PasswordResetCode)).one()
     assert stored.attempts == 1
-    # Original password is untouched.
     assert verify_password("oldpass123", _user(session).password_hash)
 
 
@@ -125,7 +121,7 @@ def test_reset_password_expired_code_raises(session):
     code = _extract_code(sender.sent[0]["body"])
 
     stored = session.scalars(select(PasswordResetCode)).one()
-    stored.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=1)
     session.commit()
 
     with pytest.raises(UnauthorizedError):
@@ -137,4 +133,3 @@ def test_reset_password_unknown_email_raises(session):
         AuthService(session, FakeEmailSender()).reset_password(
             "ghost@x.com", "123456", "newpass456"
         )
-

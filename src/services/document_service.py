@@ -4,32 +4,31 @@ from fastapi import Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.enums.vectorization_status import VectorizationStatus
 from src.exceptions import NotFoundError, ValidationError
-from src.interfaces.document_service import IDocumentService
-from src.interfaces.qa_cache import IQaCache
-from src.interfaces.text_extractor import ITextExtractor
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.category import Category
 from src.models.document_version import DocumentVersion
 from src.models.knowledge_document import KnowledgeDocument
+from src.models.vector_chunk import VectorChunk
+from src.protocols.qa_cache import QaCacheProtocol
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
 from src.services.qa_cache import get_qa_cache
-from src.services.text_extractor import get_text_extractor
+from src.services.text_extractor import TextExtractor, get_text_extractor
 from src.services.vector_index_service import get_vector_index_service
 
 logger = logging.getLogger(__name__)
 
 
-class DocumentService(IDocumentService):
+class DocumentService:
     def __init__(
         self,
         session: Session,
-        text_extractor: ITextExtractor,
-        vector_index: IVectorIndexService,
-        cache: IQaCache,
+        text_extractor: TextExtractor,
+        vector_index: VectorIndexServiceProtocol,
+        cache: QaCacheProtocol,
     ) -> None:
         self._session = session
         self._text_extractor = text_extractor
@@ -61,9 +60,7 @@ class DocumentService(IDocumentService):
 
     @staticmethod
     def _serialize_document(doc: KnowledgeDocument) -> dict:
-        latest = (
-            max(doc.versions, key=lambda v: v.version_number) if doc.versions else None
-        )
+        latest = doc.latest_version
         return {
             "id": doc.id,
             "file_name": doc.file_name,
@@ -83,7 +80,7 @@ class DocumentService(IDocumentService):
         uploaded_by: str | None = None,
         category_id: str | None = None,
     ) -> str:
-        try:
+        with transaction(self._session):
             doc = KnowledgeDocument(
                 file_name=file_name,
                 category=category.value,
@@ -91,12 +88,16 @@ class DocumentService(IDocumentService):
                 uploaded_by=uploaded_by,
             )
             self._session.add(doc)
-            self._session.commit()
-            self._session.refresh(doc)
-            return doc.id
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(doc)
+        return doc.id
+
+    def _latest_version_row(self, document_id: str) -> DocumentVersion | None:
+        return self._session.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.document_id == document_id)
+            .order_by(DocumentVersion.version_number.desc())
+            .limit(1)
+        ).scalar_one_or_none()
 
     def add_version(
         self,
@@ -104,20 +105,40 @@ class DocumentService(IDocumentService):
         file_data: bytes,
         content_type: ContentType,
     ) -> dict:
+        """Ingest ``file_data`` as a new version. Bytes identical to the current
+        latest version are a no-op returning the existing version, so a retried
+        upload (batch or resumable session) never appends a duplicate."""
+        latest = self._latest_version_row(document_id)
+        if latest is not None and latest.file_data == file_data:
+            chunk_count = self._session.execute(
+                select(func.count())
+                .select_from(VectorChunk)
+                .where(
+                    VectorChunk.document_id == document_id,
+                    VectorChunk.version_number == latest.version_number,
+                )
+            ).scalar_one()
+            return {
+                "id": latest.id,
+                "document_id": document_id,
+                "version_number": latest.version_number,
+                "vectorization_status": latest.vectorization_status,
+                "content_type": latest.content_type,
+                "chunk_count": chunk_count,
+            }
+
         text = self._text_extractor.extract_from_bytes(file_data, content_type)
         if not text:
             raise ValidationError("No text extracted from uploaded content.")
 
         pages = self._text_extractor.extract_pages_from_bytes(file_data, content_type)
         if pages:
-            chunks, embeddings, pages_per_chunk = self._vector_index.prepare_paged(
-                pages
-            )
+            chunks, embeddings, pages_per_chunk = self._vector_index.prepare_paged(pages)
         else:
             chunks, embeddings = self._vector_index.prepare(text)
             pages_per_chunk = None
 
-        try:
+        with transaction(self._session):
             doc = self._session.get(KnowledgeDocument, document_id)
             if doc is None:
                 raise NotFoundError(f"Document not found: {document_id}")
@@ -146,10 +167,6 @@ class DocumentService(IDocumentService):
                 pages_per_chunk=pages_per_chunk,
                 category_id=doc.category_id,
             )
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
         self._cache.invalidate_category(doc.category_id)
         logger.info(
@@ -187,13 +204,9 @@ class DocumentService(IDocumentService):
         uploaded_by: str | None = None,
         category_id: str | None = None,
     ) -> dict:
-        # No category means the document is shared ("de todos"); only validate
-        # when one was actually chosen.
         if category_id is not None:
             self._assert_category_exists(category_id)
 
-        # Extraction/embedding happen inside add_version; calling them here just to
-        # validate would double the cost (the embedding API runs twice).
         existing = self._find_existing_document(file_name, uploaded_by)
         if existing is not None:
             version = self.add_version(existing.id, file_data, content_type)
@@ -212,12 +225,11 @@ class DocumentService(IDocumentService):
             version = self.add_version(document_id, file_data, content_type)
         except Exception:
             try:
-                doc = self._session.get(KnowledgeDocument, document_id)
-                if doc is not None:
-                    self._session.delete(doc)
-                    self._session.commit()
+                with transaction(self._session):
+                    doc = self._session.get(KnowledgeDocument, document_id)
+                    if doc is not None:
+                        self._session.delete(doc)
             except Exception:
-                self._session.rollback()
                 logger.exception(
                     "failed to clean up orphan document=%s after indexing failure",
                     document_id,
@@ -240,16 +252,11 @@ class DocumentService(IDocumentService):
         if not doc.versions:
             raise NotFoundError(f"Document {document_id} has no versions.")
 
-        if version_number is None:
-            version = max(doc.versions, key=lambda v: v.version_number)
-        else:
-            version = next(
-                (v for v in doc.versions if v.version_number == version_number), None
+        version = doc.find_version(version_number)
+        if version is None:
+            raise NotFoundError(
+                f"Version {version_number} does not exist for document {document_id}."
             )
-            if version is None:
-                raise NotFoundError(
-                    f"Version {version_number} does not exist for document {document_id}."
-                )
         return (
             version.file_data,
             version.content_type,
@@ -272,15 +279,11 @@ class DocumentService(IDocumentService):
             count_stmt = count_stmt.where(*filters)
         total = self._session.execute(count_stmt).scalar_one()
 
-        page_stmt = select(KnowledgeDocument).options(
-            selectinload(KnowledgeDocument.versions)
-        )
+        page_stmt = select(KnowledgeDocument).options(selectinload(KnowledgeDocument.versions))
         if filters:
             page_stmt = page_stmt.where(*filters)
         page_stmt = (
-            page_stmt.order_by(KnowledgeDocument.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+            page_stmt.order_by(KnowledgeDocument.created_at.desc()).limit(limit).offset(offset)
         )
         docs = self._session.execute(page_stmt).scalars().all()
         return {
@@ -295,22 +298,18 @@ class DocumentService(IDocumentService):
         return self._serialize_document(doc)
 
     def delete_document(self, document_id: str) -> None:
-        try:
+        with transaction(self._session):
             doc = self._load(document_id)
             category_id = doc.category_id
             self._vector_index.purge_document(document_id)
             self._session.delete(doc)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
         self._cache.invalidate_category(category_id)
 
 
 def get_document_service(
     session: Session = Depends(get_session),
-    text_extractor: ITextExtractor = Depends(get_text_extractor),
-    vector_index: IVectorIndexService = Depends(get_vector_index_service),
-    cache: IQaCache = Depends(get_qa_cache),
-) -> IDocumentService:
+    text_extractor: TextExtractor = Depends(get_text_extractor),
+    vector_index: VectorIndexServiceProtocol = Depends(get_vector_index_service),
+    cache: QaCacheProtocol = Depends(get_qa_cache),
+) -> DocumentService:
     return DocumentService(session, text_extractor, vector_index, cache)

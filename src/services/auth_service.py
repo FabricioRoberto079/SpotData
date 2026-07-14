@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta, timezone
+import logging
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends
 from sqlalchemy import delete, select
@@ -10,17 +12,16 @@ from src.auth import (
     issue_token,
     verify_password,
 )
-from src.data.postgres_client import get_session
+from src.data.postgres_client import get_session, transaction
 from src.enums.user_role import UserRole
 from src.exceptions import ConflictError, UnauthorizedError
 from src.integrations.email import get_email_sender
-from src.interfaces.auth_service import IAuthService
-from src.interfaces.email_sender import IEmailSender
 from src.models.password_reset_code import PasswordResetCode
 from src.models.user import User
+from src.protocols.email_sender import EmailSenderProtocol
 
-# Reset codes are short-lived and brute-force limited. These are deliberate
-# constants, not env config — tune here if the policy changes.
+logger = logging.getLogger(__name__)
+
 _CODE_TTL_MINUTES = 15
 _MAX_ATTEMPTS = 5
 _RESET_EMAIL_SUBJECT = "SpotData — código de redefinição de senha"
@@ -47,19 +48,17 @@ def _reset_email_body(name: str, code: str) -> str:
 
 def _as_utc(value: datetime) -> datetime:
     """SQLite returns naive datetimes; normalize to aware UTC for comparison."""
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-class AuthService(IAuthService):
-    def __init__(
-        self, session: Session, email_sender: IEmailSender | None = None
-    ) -> None:
+class AuthService:
+    def __init__(self, session: Session, email_sender: EmailSenderProtocol | None = None) -> None:
         self._session = session
         self._email_sender = email_sender or get_email_sender()
 
     def register(self, name: str, email: str, password: str) -> dict:
         email_norm = email.strip().lower()
-        try:
+        with transaction(self._session):
             existing = self._session.execute(
                 select(User).where(User.email == email_norm)
             ).scalar_one_or_none()
@@ -73,11 +72,7 @@ class AuthService(IAuthService):
                 password_hash=hash_password(password),
             )
             self._session.add(user)
-            self._session.commit()
-            self._session.refresh(user)
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.refresh(user)
 
         return _user_out(user)
 
@@ -93,18 +88,21 @@ class AuthService(IAuthService):
         return {"access_token": token}
 
     def request_password_reset(self, email: str) -> None:
+        """Always succeeds with the same generic outcome, whether or not the email
+        is registered: the unknown-email path burns an equivalent bcrypt hash and
+        send failures are logged but never surfaced, so neither the status code
+        nor (roughly) the response time reveals account existence."""
         email_norm = email.strip().lower()
         user = self._session.execute(
             select(User).where(User.email == email_norm)
         ).scalar_one_or_none()
-        # Never reveal whether the email is registered: silently no-op otherwise.
+        code = generate_reset_code()
         if user is None:
+            hash_password(code)
             return
 
-        code = generate_reset_code()
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=_CODE_TTL_MINUTES)
-        try:
-            # Drop any previous unused codes so only the newest one is valid.
+        expires_at = datetime.now(UTC) + timedelta(minutes=_CODE_TTL_MINUTES)
+        with transaction(self._session):
             self._session.execute(
                 delete(PasswordResetCode).where(
                     PasswordResetCode.user_id == user.id,
@@ -118,18 +116,15 @@ class AuthService(IAuthService):
                     expires_at=expires_at,
                 )
             )
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
-        # Send only after the code is persisted, so a send failure never leaves
-        # the user with a code we can't verify.
-        self._email_sender.send(
-            to=user.email,
-            subject=_RESET_EMAIL_SUBJECT,
-            body=_reset_email_body(user.name, code),
-        )
+        try:
+            self._email_sender.send(
+                to=user.email,
+                subject=_RESET_EMAIL_SUBJECT,
+                body=_reset_email_body(user.name, code),
+            )
+        except Exception:
+            logger.exception("password reset email failed to send")
 
     def reset_password(self, email: str, code: str, new_password: str) -> None:
         email_norm = email.strip().lower()
@@ -152,31 +147,23 @@ class AuthService(IAuthService):
                 .first()
             )
 
-        # Generic error for every failure mode — no oracle for attackers.
         invalid = UnauthorizedError("Invalid or expired reset code.")
         if user is None or record is None:
             raise invalid
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if _as_utc(record.expires_at) < now or record.attempts >= _MAX_ATTEMPTS:
             raise invalid
 
         if not verify_password(code, record.code_hash):
-            try:
+            with suppress(Exception), transaction(self._session):
                 record.attempts += 1
-                self._session.commit()
-            except Exception:
-                self._session.rollback()
             raise invalid
 
-        try:
+        with transaction(self._session):
             user.password_hash = hash_password(new_password)
             record.used_at = now
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
 
 
-def get_auth_service(session: Session = Depends(get_session)) -> IAuthService:
+def get_auth_service(session: Session = Depends(get_session)) -> AuthService:
     return AuthService(session, get_email_sender())

@@ -1,18 +1,22 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.enums.user_role import UserRole
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
+
+if TYPE_CHECKING:
+    from src.models.knowledge_document import KnowledgeDocument
+    from src.models.query import Query
 
 
-class User(BaseModel):
+class User(TimestampedBase):
     __tablename__ = "users"
 
     name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    role: Mapped[str] = mapped_column(
-        String, nullable=False, default=UserRole.VIEWER.value
-    )
+    role: Mapped[str] = mapped_column(String, nullable=False, default=UserRole.VIEWER.value)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )

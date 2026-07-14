@@ -4,7 +4,6 @@ from src.enums.user_role import UserRole
 
 
 class CategoryCreate(BaseModel):
-    # Stored normalized: special chars stripped, spaces -> '_', UPPERCASE.
     name: str = Field(min_length=1, max_length=120)
 
 

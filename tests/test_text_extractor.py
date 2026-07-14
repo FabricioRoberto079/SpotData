@@ -2,11 +2,10 @@ import pytest
 
 from src.enums.content_type import ContentType
 from src.exceptions import ValidationError
-from src.interfaces.content_extractor import IContentExtractor
 from src.services.text_extractor import TextExtractor
 
 
-class _Stub(IContentExtractor):
+class _Stub:
     def __init__(self, value: str):
         self.value = value
         self.from_bytes_calls: list[bytes] = []
@@ -19,22 +18,22 @@ class _Stub(IContentExtractor):
 def test_dispatches_per_content_type():
     pdf = _Stub("PDF")
     txt = _Stub("TXT")
-    extractor = TextExtractor({ContentType.PDF: pdf, ContentType.TEXTO: txt})
+    extractor = TextExtractor({ContentType.PDF: pdf, ContentType.TEXT: txt})
     assert extractor.extract_from_bytes(b"x", ContentType.PDF) == "PDF"
-    assert extractor.extract_from_bytes(b"x", ContentType.TEXTO) == "TXT"
+    assert extractor.extract_from_bytes(b"x", ContentType.TEXT) == "TXT"
     assert pdf.from_bytes_calls == [b"x"]
 
 
 def test_unsupported_type_raises_validation_error():
     extractor = TextExtractor({ContentType.PDF: _Stub("x")})
     with pytest.raises(ValidationError):
-        extractor.extract_from_bytes(b"x", ContentType.FOTO)
+        extractor.extract_from_bytes(b"x", ContentType.IMAGE)
 
 
 def test_plain_text_extractor_decodes_utf8():
     from src.services.extractors.plain_text import PlainTextExtractor
 
-    assert PlainTextExtractor().from_bytes("olá".encode("utf-8")) == "olá"
+    assert PlainTextExtractor().from_bytes("olá".encode()) == "olá"
 
 
 def test_word_extractor_splits_docx_on_manual_page_break():

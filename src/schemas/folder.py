@@ -12,7 +12,7 @@ class FolderOut(BaseModel):
 
 
 class FolderNode(FolderOut):
-    children: list["FolderNode"] = Field(default_factory=list)
+    children: list[FolderNode] = Field(default_factory=list)
 
 
 class FolderCreate(BaseModel):

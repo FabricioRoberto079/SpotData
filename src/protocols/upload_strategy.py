@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Protocol
 
 from fastapi import UploadFile
 
@@ -15,8 +15,7 @@ class UploadPayload:
     category: DocumentCategory
 
 
-class IUploadStrategy(ABC):
-    @abstractmethod
+class UploadStrategyProtocol(Protocol):
     async def build_payload(
         self,
         *,

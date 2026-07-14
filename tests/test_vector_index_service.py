@@ -12,18 +12,14 @@ from src.services.vector_index_service import VectorIndexService
 
 def _seed_document(session, doc_id: str = "doc-1") -> None:
     session.add(
-        KnowledgeDocument(
-            id=doc_id, file_name="x.txt", category=DocumentCategory.DOCUMENTS.value
-        )
+        KnowledgeDocument(id=doc_id, file_name="x.txt", category=DocumentCategory.DOCUMENTS.value)
     )
     session.commit()
 
 
 def test_prepare_chunks_and_embeds(session, fake_llm):
     svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
-    chunks, embeddings = svc.prepare(
-        "Frase um. Frase dois. Frase tres. Frase quatro."
-    )
+    chunks, embeddings = svc.prepare("Frase um. Frase dois. Frase tres. Frase quatro.")
     assert len(chunks) >= 1
     assert len(embeddings) == len(chunks)
 
@@ -37,9 +33,7 @@ def test_prepare_empty_text_raises_validation(session, fake_llm):
 def test_commit_persists_chunks_with_is_latest(session, fake_llm):
     _seed_document(session)
     svc = VectorIndexService(session, TextChunker(max_chars=20, overlap=5), fake_llm)
-    chunks, embeddings = svc.prepare(
-        "Frase um. Frase dois. Frase tres. Frase quatro."
-    )
+    chunks, embeddings = svc.prepare("Frase um. Frase dois. Frase tres. Frase quatro.")
     count = svc.commit(
         document_id="doc-1",
         version_number=1,

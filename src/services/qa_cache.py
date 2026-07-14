@@ -9,8 +9,8 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 
 from src.data.postgres_client import SessionLocal
-from src.interfaces.qa_cache import IQaCache, normalize_question, question_key
 from src.models.qa_cache_entry import QaCacheEntry
+from src.protocols.qa_cache import QaCacheProtocol, normalize_question, question_key
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class _L1Entry:
     last_access: float = field(default_factory=time.monotonic)
 
 
-class HybridQaCache(IQaCache):
+class HybridQaCache:
     def __init__(
         self,
         l1_max_entries: int = QA_CACHE_L1_MAX_ENTRIES,
@@ -44,9 +44,14 @@ class HybridQaCache(IQaCache):
         self._l2_hits = 0
         self._misses = 0
 
-    def lookup_exact(
-        self, question: str, category_id: str | None = None
-    ) -> dict[str, Any] | None:
+    def generation(self) -> int:
+        """Monotonic invalidation counter. Capture it before retrieval and pass it
+        to ``put`` so an answer built from pre-invalidation content is discarded
+        instead of resurrecting stale data in the cache."""
+        with self._l1_lock:
+            return self._generation
+
+    def lookup_exact(self, question: str, category_id: str | None = None) -> dict[str, Any] | None:
         key = question_key(question, category_id)
         with self._l1_lock:
             entry = self._l1.get(key)
@@ -57,9 +62,7 @@ class HybridQaCache(IQaCache):
             self._l1_hits += 1
             return dict(entry.payload)
 
-    def _put_l1(
-        self, question: str, payload: dict[str, Any], category_id: str | None
-    ) -> None:
+    def _put_l1(self, question: str, payload: dict[str, Any], category_id: str | None) -> None:
         key = question_key(question, category_id)
         with self._l1_lock:
             existing = self._l1.get(key)
@@ -88,9 +91,6 @@ class HybridQaCache(IQaCache):
         try:
             with SessionLocal() as session:
                 distance = QaCacheEntry.embedding.cosine_distance(embedding)
-                # Match the scope exactly: a category chat never reuses a global
-                # answer (which drew on every category) nor another category's,
-                # and a global chat never reuses a narrower category answer.
                 scope = (
                     QaCacheEntry.category_id.is_(None)
                     if category_id is None
@@ -133,7 +133,13 @@ class HybridQaCache(IQaCache):
         embedding: list[float],
         payload: dict[str, Any],
         category_id: str | None = None,
+        generation: int | None = None,
     ) -> None:
+        if generation is not None:
+            with self._l1_lock:
+                if generation != self._generation:
+                    logger.info("Semantic cache: stale write skipped (invalidated mid-request)")
+                    return
         self._put_l1(question, payload, category_id)
         key = question_key(question, category_id)
         try:
@@ -211,9 +217,7 @@ class HybridQaCache(IQaCache):
                 reverse=True,
             )[:10]
             total = self._l1_hits + self._l2_hits + self._misses
-            hit_ratio = (
-                (self._l1_hits + self._l2_hits) / total if total else 0.0
-            )
+            hit_ratio = (self._l1_hits + self._l2_hits) / total if total else 0.0
             data: dict[str, Any] = {
                 "l1_size": len(self._l1),
                 "l1_max": self._l1_max,
@@ -243,11 +247,11 @@ class HybridQaCache(IQaCache):
         return data
 
 
-_instance: IQaCache | None = None
+_instance: QaCacheProtocol | None = None
 _instance_lock = threading.Lock()
 
 
-def get_qa_cache() -> IQaCache:
+def get_qa_cache() -> QaCacheProtocol:
     global _instance
     if _instance is None:
         with _instance_lock:

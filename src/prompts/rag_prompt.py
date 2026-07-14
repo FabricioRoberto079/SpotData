@@ -1,9 +1,12 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from src.prompts.history import trim_history
 
 STALE_AFTER_DAYS = 365
+RAG_HISTORY_MESSAGES = 20
+RAG_HISTORY_MESSAGE_MAX_CHARS = 1500
 
 
 class RegisterEvidence(BaseModel):
@@ -18,9 +21,7 @@ class RegisterEvidence(BaseModel):
             "exactly as shown in the entry's [index=N ...] header."
         )
     )
-    confidence: float = Field(
-        description="Confidence in this citation in the range 0.0–1.0."
-    )
+    confidence: float = Field(description="Confidence in this citation in the range 0.0–1.0.")
 
 
 class RagAnswer(BaseModel):
@@ -69,6 +70,14 @@ in the `citations` array.
 
 Rules:
 - Use only information present in the CONTEXT. Do not invent anything.
+- NO PARTIAL COVERAGE FROM GENERAL KNOWLEDGE. The mere presence of a name, term \
+or entity in the CONTEXT does NOT authorize you to describe it from what you \
+already know. Answer ONLY the specific facts literally stated in the CONTEXT \
+snippets. If the CONTEXT merely mentions an entity but does not contain the \
+facts the question asks for, treat the question as NOT covered: set `answer` to \
+an empty string and leave `citations` empty. Example: if the CONTEXT names a \
+person in passing but says nothing about their biography, do NOT supply their \
+biography — return empty. Never blend retrieved snippets with outside knowledge.
 - If the user is greeting, chit-chatting, thanking, saying goodbye, or otherwise \
 NOT asking a question answerable from the CONTEXT (e.g. "oi", "olá", "tudo bem?", \
 "obrigado", "hello", "how are you", "thanks"), set `answer` to an empty string \
@@ -115,7 +124,7 @@ def _format_created_at(value) -> str:
 
 
 def _build_user_content(question: str, contexts: list[dict]) -> str:
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     if contexts:
         context_block = "\n\n".join(
             f"[index={i} file={c.get('file_name')} "
@@ -125,15 +134,17 @@ def _build_user_content(question: str, contexts: list[dict]) -> str:
         )
     else:
         context_block = "(empty)"
-    return (
-        f"TODAY: {today}\n\n"
-        f"CONTEXT:\n{context_block}\n\n"
-        f"QUESTION: {question}"
-    )
+    return f"TODAY: {today}\n\nCONTEXT:\n{context_block}\n\nQUESTION: {question}"
 
 
-def build_messages(question: str, contexts: list[dict]) -> list[dict]:
+def build_messages(
+    question: str, contexts: list[dict], history: list[dict] | None = None
+) -> list[dict]:
+    """Assemble the RAG prompt. History is bounded (tail + per-message cap) so a
+    long chat with verbose answers cannot grow the per-turn token cost without
+    limit or crowd out the retrieved CONTEXT the answer must be grounded in."""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *trim_history(history or [], RAG_HISTORY_MESSAGES, RAG_HISTORY_MESSAGE_MAX_CHARS),
         {"role": "user", "content": _build_user_content(question, contexts)},
     ]
