@@ -3,11 +3,11 @@ from fastapi import UploadFile
 from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.exceptions import ValidationError
-from src.interfaces.upload_strategy import IUploadStrategy, UploadPayload
+from src.protocols.upload_strategy import UploadPayload
 from src.services.upload_strategies._shared import MAX_UPLOAD_SIZE, clean_optional
 
 
-class TextUploadStrategy(IUploadStrategy):
+class TextUploadStrategy:
     async def build_payload(
         self,
         *,

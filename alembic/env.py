@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, pool
 
 from alembic import context
 from src.data.postgres_client import get_database_url
-from src.models.base_model import Base
+from src.models.base import Base
 from src.models.chat import Chat  # noqa: F401
 from src.models.chat_folder import ChatFolder  # noqa: F401
 from src.models.document_version import DocumentVersion  # noqa: F401

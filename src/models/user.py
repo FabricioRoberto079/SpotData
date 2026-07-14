@@ -4,14 +4,14 @@ from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.enums.user_role import UserRole
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 if TYPE_CHECKING:
     from src.models.knowledge_document import KnowledgeDocument
     from src.models.query import Query
 
 
-class User(BaseModel):
+class User(TimestampedBase):
     __tablename__ = "users"
 
     name: Mapped[str] = mapped_column(String, nullable=False)

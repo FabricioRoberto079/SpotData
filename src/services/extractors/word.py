@@ -7,7 +7,6 @@ from pathlib import Path
 from docx import Document
 
 from src.exceptions import ValidationError
-from src.interfaces.content_extractor import IContentExtractor
 
 DOCX_MAGIC = b"PK\x03\x04"
 DOC_MAGIC = b"\xd0\xcf\x11\xe0"
@@ -24,7 +23,7 @@ _TAG_LRPB = f"{{{_W_NS}}}lastRenderedPageBreak"
 _ATTR_TYPE = f"{{{_W_NS}}}type"
 
 
-class WordExtractor(IContentExtractor):
+class WordExtractor:
     def from_bytes(self, data: bytes) -> str:
         if data.startswith(DOCX_MAGIC):
             return self._extract_docx(data)

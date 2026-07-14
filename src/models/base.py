@@ -14,7 +14,7 @@ def _default_updated_at(context) -> datetime:
     return params.get("created_at") or datetime.now(UTC)
 
 
-class BaseModel(Base):
+class TimestampedBase(Base):
     __abstract__ = True
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))

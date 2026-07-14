@@ -6,13 +6,12 @@ from sqlalchemy import select
 
 from src.auth import verify_password
 from src.exceptions import UnauthorizedError
-from src.interfaces.email_sender import IEmailSender
 from src.models.password_reset_code import PasswordResetCode
 from src.models.user import User
 from src.services.auth_service import AuthService
 
 
-class FakeEmailSender(IEmailSender):
+class FakeEmailSender:
     def __init__(self):
         self.sent: list[dict] = []
 

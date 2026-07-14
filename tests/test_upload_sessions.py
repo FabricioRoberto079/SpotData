@@ -1,7 +1,7 @@
 """Resumable upload sessions: create → chunks (pause/resume) → complete.
 
 The service is exercised directly with the sqlite session from conftest and a
-stub IDocumentService, so no extraction/embedding runs — `complete` must simply
+stub DocumentService, so no extraction/embedding runs — `complete` must simply
 hand the accumulated bytes to the regular ingestion entry point.
 """
 
@@ -11,7 +11,6 @@ from src.enums.content_type import ContentType
 from src.enums.document_category import DocumentCategory
 from src.enums.upload_session_status import UploadSessionStatus
 from src.exceptions import ConflictError, NotFoundError, ValidationError
-from src.interfaces.document_service import IDocumentService
 from src.models.category import Category
 from src.models.upload_session import UploadSession
 from src.models.user import User
@@ -33,7 +32,7 @@ def _seed_category(session, category_id: str = "cat-1") -> str:
     return category_id
 
 
-class _StubDocumentService(IDocumentService):
+class _StubDocumentService:
     def __init__(self):
         self.uploads: list[dict] = []
 

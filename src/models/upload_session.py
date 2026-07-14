@@ -2,10 +2,10 @@ from sqlalchemy import ForeignKey, Integer, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.enums.upload_session_status import UploadSessionStatus
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 
-class UploadSession(BaseModel):
+class UploadSession(TimestampedBase):
     """A resumable upload in progress: bytes accumulate in ``data`` until
     ``bytes_received == total_size``, then completion runs the regular
     ingestion pipeline and clears the blob."""

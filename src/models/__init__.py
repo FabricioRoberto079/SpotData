@@ -1,4 +1,4 @@
-from src.models.base_model import Base, BaseModel
+from src.models.base import Base, TimestampedBase
 from src.models.category import Category
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
@@ -14,7 +14,7 @@ from src.models.vector_chunk import VectorChunk
 
 __all__ = [
     "Base",
-    "BaseModel",
+    "TimestampedBase",
     "User",
     "PasswordResetCode",
     "Category",

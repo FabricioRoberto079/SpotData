@@ -6,11 +6,9 @@ from sqlalchemy.orm import Session
 from src.data.postgres_client import get_session, transaction
 from src.enums.upload_session_status import UploadSessionStatus
 from src.exceptions import ConflictError, NotFoundError, ValidationError
-from src.interfaces.document_service import IDocumentService
-from src.interfaces.upload_session_service import IUploadSessionService
 from src.models.category import Category
 from src.models.upload_session import UploadSession
-from src.services.document_service import get_document_service
+from src.services.document_service import DocumentService, get_document_service
 from src.services.upload_strategies._shared import (
     DOCUMENT_EXTENSION_MAP,
     MAX_UPLOAD_SIZE,
@@ -21,13 +19,13 @@ from src.services.upload_strategies._shared import (
 logger = logging.getLogger(__name__)
 
 
-class UploadSessionService(IUploadSessionService):
+class UploadSessionService:
     """Resumable uploads. The client owns the pacing: it opens a session, sends
     sequential chunks (pausing whenever it wants), asks `get_status` for the
     next offset to resume from, and calls `complete` once every byte arrived —
     only then the regular ingestion pipeline (extraction, embeddings) runs."""
 
-    def __init__(self, session: Session, document_service: IDocumentService) -> None:
+    def __init__(self, session: Session, document_service: DocumentService) -> None:
         self._session = session
         self._document_service = document_service
 
@@ -164,6 +162,6 @@ class UploadSessionService(IUploadSessionService):
 
 def get_upload_session_service(
     session: Session = Depends(get_session),
-    document_service: IDocumentService = Depends(get_document_service),
-) -> IUploadSessionService:
+    document_service: DocumentService = Depends(get_document_service),
+) -> UploadSessionService:
     return UploadSessionService(session, document_service)

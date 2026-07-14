@@ -7,11 +7,10 @@ from fastapi.responses import StreamingResponse
 
 from src.auth import require_user
 from src.exceptions import DomainError
-from src.interfaces.chat_service import IChatService
 from src.models.user import User
 from src.schemas.chat import ChatDetailOut, ChatOut, ChatUpdate, MessageCreate
 from src.schemas.system import MessageResponse
-from src.services.chat_service import get_chat_service
+from src.services.chat_service import ChatService, get_chat_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ async def list_chats(
         description="Optional. Filter chats by folder ID. Omit to list across all folders.",
     ),
     current_user: User = Depends(require_user),
-    chat_service: IChatService = Depends(get_chat_service),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     return await asyncio.to_thread(
         chat_service.list_chats, _clean_optional(folder_id), current_user.id
@@ -50,7 +49,7 @@ def _encode_event(event: dict) -> bytes:
 async def send_message(
     payload: MessageCreate,
     current_user: User = Depends(require_user),
-    chat_service: IChatService = Depends(get_chat_service),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     event_gen = chat_service.ask_stream(
         question=payload.question,
@@ -114,7 +113,7 @@ async def send_message(
 async def get_chat(
     chat_id: str,
     current_user: User = Depends(require_user),
-    chat_service: IChatService = Depends(get_chat_service),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     return await asyncio.to_thread(chat_service.get, chat_id, current_user.id)
 
@@ -128,7 +127,7 @@ async def update_chat(
     chat_id: str,
     payload: ChatUpdate,
     current_user: User = Depends(require_user),
-    chat_service: IChatService = Depends(get_chat_service),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     update_data = payload.model_dump(exclude_unset=True)
     if "folder_id" in update_data:
@@ -142,7 +141,7 @@ async def update_chat(
 async def delete_chat(
     chat_id: str,
     current_user: User = Depends(require_user),
-    chat_service: IChatService = Depends(get_chat_service),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     await asyncio.to_thread(chat_service.delete, chat_id, current_user.id)
     return {"message": "Chat removed."}

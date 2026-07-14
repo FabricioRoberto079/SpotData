@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.config import embedding_dimension
-from src.models.base_model import Base
+from src.models.base import Base
 
 
 class QaCacheEntry(Base):

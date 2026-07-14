@@ -4,13 +4,13 @@ from sqlalchemy import ForeignKey, Integer, LargeBinary, String, Text, UniqueCon
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.enums.vectorization_status import VectorizationStatus
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 if TYPE_CHECKING:
     from src.models.knowledge_document import KnowledgeDocument
 
 
-class DocumentVersion(BaseModel):
+class DocumentVersion(TimestampedBase):
     __tablename__ = "document_versions"
     __table_args__ = (
         UniqueConstraint("document_id", "version_number", name="uq_document_version"),

@@ -10,12 +10,11 @@ from sqlalchemy.orm import Session
 from src.data.postgres_client import get_session
 from src.exceptions import ValidationError
 from src.integrations.llm import LlmClient, LlmError, get_llm_client
-from src.interfaces.text_chunker import ITextChunker
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.document_version import DocumentVersion
 from src.models.knowledge_document import KnowledgeDocument
 from src.models.vector_chunk import VectorChunk
-from src.services.text_chunker import get_text_chunker
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
+from src.services.text_chunker import TextChunker, get_text_chunker
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +24,11 @@ RRF_K = 60
 TS_LANGUAGE = "portuguese"
 
 
-class VectorIndexService(IVectorIndexService):
+class VectorIndexService:
     def __init__(
         self,
         session: Session,
-        text_chunker: ITextChunker,
+        text_chunker: TextChunker,
         llm_client: LlmClient,
     ) -> None:
         self._session = session
@@ -288,7 +287,7 @@ class VectorIndexService(IVectorIndexService):
 
 def get_vector_index_service(
     session: Session = Depends(get_session),
-    text_chunker: ITextChunker = Depends(get_text_chunker),
+    text_chunker: TextChunker = Depends(get_text_chunker),
     llm: LlmClient = Depends(get_llm_client),
-) -> IVectorIndexService:
+) -> VectorIndexServiceProtocol:
     return VectorIndexService(session, text_chunker, llm)

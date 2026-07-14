@@ -1,7 +1,7 @@
 from fastapi import UploadFile
 
 from src.exceptions import ValidationError
-from src.interfaces.upload_strategy import IUploadStrategy, UploadPayload
+from src.protocols.upload_strategy import UploadPayload
 from src.services.upload_strategies._shared import (
     FILE_EXTENSION_MAP,
     clean_optional,
@@ -11,7 +11,7 @@ from src.services.upload_strategies._shared import (
 )
 
 
-class FileUploadStrategy(IUploadStrategy):
+class FileUploadStrategy:
     async def build_payload(
         self,
         *,

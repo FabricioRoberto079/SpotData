@@ -2,11 +2,10 @@ import pytest
 
 from src.enums.content_type import ContentType
 from src.exceptions import ValidationError
-from src.interfaces.content_extractor import IContentExtractor
 from src.services.text_extractor import TextExtractor
 
 
-class _Stub(IContentExtractor):
+class _Stub:
     def __init__(self, value: str):
         self.value = value
         self.from_bytes_calls: list[bytes] = []

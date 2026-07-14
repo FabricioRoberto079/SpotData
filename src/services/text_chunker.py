@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 
-from src.interfaces.text_chunker import ITextChunker
-
 DEFAULT_MAX_CHARS = 1500
 DEFAULT_OVERLAP = 200
 MIN_CHUNK_CHARS = 50
@@ -12,7 +10,7 @@ _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
-class TextChunker(ITextChunker):
+class TextChunker:
     def __init__(
         self,
         max_chars: int = DEFAULT_MAX_CHARS,
@@ -101,5 +99,5 @@ class TextChunker(ITextChunker):
         return [c for c in chunks if len(c) >= MIN_CHUNK_CHARS] or chunks
 
 
-def get_text_chunker() -> ITextChunker:
+def get_text_chunker() -> TextChunker:
     return TextChunker()

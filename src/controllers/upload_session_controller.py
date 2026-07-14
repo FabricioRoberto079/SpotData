@@ -4,10 +4,9 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from src.auth import require_role, require_user
 from src.enums.user_role import UserRole
-from src.interfaces.upload_session_service import IUploadSessionService
 from src.models.user import User
 from src.schemas.upload_session import UploadSessionCreate, UploadSessionOut
-from src.services.upload_session_service import get_upload_session_service
+from src.services.upload_session_service import UploadSessionService, get_upload_session_service
 from src.services.upload_strategies._shared import read_upload
 
 router = APIRouter(
@@ -32,7 +31,7 @@ _EDITOR_OR_ADMIN = Depends(require_role(UserRole.EDITOR, UserRole.ADMIN))
 async def create_upload_session(
     body: UploadSessionCreate,
     current_user: User = _EDITOR_OR_ADMIN,
-    service: IUploadSessionService = Depends(get_upload_session_service),
+    service: UploadSessionService = Depends(get_upload_session_service),
 ):
     return service.create_session(
         body.file_name, body.total_size, current_user.id, body.category_id
@@ -48,7 +47,7 @@ async def create_upload_session(
 async def get_upload_session(
     session_id: str,
     current_user: User = _EDITOR_OR_ADMIN,
-    service: IUploadSessionService = Depends(get_upload_session_service),
+    service: UploadSessionService = Depends(get_upload_session_service),
 ):
     return service.get_status(session_id, current_user.id)
 
@@ -68,7 +67,7 @@ async def upload_chunk(
     offset: int = Form(..., ge=0),
     chunk: UploadFile = File(...),
     current_user: User = _EDITOR_OR_ADMIN,
-    service: IUploadSessionService = Depends(get_upload_session_service),
+    service: UploadSessionService = Depends(get_upload_session_service),
 ):
     data = await read_upload(chunk)
     return await asyncio.to_thread(service.append_chunk, session_id, current_user.id, offset, data)
@@ -82,7 +81,7 @@ async def upload_chunk(
 async def pause_upload_session(
     session_id: str,
     current_user: User = _EDITOR_OR_ADMIN,
-    service: IUploadSessionService = Depends(get_upload_session_service),
+    service: UploadSessionService = Depends(get_upload_session_service),
 ):
     return service.pause(session_id, current_user.id)
 
@@ -99,7 +98,7 @@ async def pause_upload_session(
 async def complete_upload_session(
     session_id: str,
     current_user: User = _EDITOR_OR_ADMIN,
-    service: IUploadSessionService = Depends(get_upload_session_service),
+    service: UploadSessionService = Depends(get_upload_session_service),
 ):
     result = await asyncio.to_thread(service.complete, session_id, current_user.id)
     return {"message": "Upload completed and document ingested.", **result}
@@ -112,7 +111,7 @@ async def complete_upload_session(
 async def abort_upload_session(
     session_id: str,
     current_user: User = _EDITOR_OR_ADMIN,
-    service: IUploadSessionService = Depends(get_upload_session_service),
+    service: UploadSessionService = Depends(get_upload_session_service),
 ):
     service.abort(session_id, current_user.id)
     return {"message": "Upload session aborted."}

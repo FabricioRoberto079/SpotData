@@ -12,10 +12,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.config import embedding_dimension
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 
-class VectorChunk(BaseModel):
+class VectorChunk(TimestampedBase):
     __tablename__ = "vector_chunks"
     __table_args__ = (
         UniqueConstraint(

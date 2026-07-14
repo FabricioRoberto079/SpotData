@@ -3,10 +3,10 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 
-class PasswordResetCode(BaseModel):
+class PasswordResetCode(TimestampedBase):
     __tablename__ = "password_reset_codes"
 
     user_id: Mapped[str] = mapped_column(

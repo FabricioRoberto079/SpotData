@@ -4,11 +4,10 @@ from sqlalchemy.orm import Session
 
 from src.data.postgres_client import get_session, transaction
 from src.exceptions import ConflictError, NotFoundError
-from src.interfaces.folder_service import IFolderService
 from src.models.chat_folder import ChatFolder
 
 
-class ChatFolderService(IFolderService):
+class ChatFolderService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -130,5 +129,5 @@ class ChatFolderService(IFolderService):
 
 def get_chat_folder_service(
     session: Session = Depends(get_session),
-) -> IFolderService:
+) -> ChatFolderService:
     return ChatFolderService(session)

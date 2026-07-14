@@ -4,14 +4,14 @@ from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.enums.response_status import ResponseStatus
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 if TYPE_CHECKING:
     from src.models.evidence_citation import EvidenceCitation
     from src.models.query import Query
 
 
-class Response(BaseModel):
+class Response(TimestampedBase):
     __tablename__ = "responses"
 
     query_id: Mapped[str] = mapped_column(ForeignKey("queries.id"), unique=True, nullable=False)

@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.models.base_model import BaseModel
+from src.models.base import TimestampedBase
 
 if TYPE_CHECKING:
     from src.models.chat import Chat
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from src.models.user import User
 
 
-class Query(BaseModel):
+class Query(TimestampedBase):
     __tablename__ = "queries"
 
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
