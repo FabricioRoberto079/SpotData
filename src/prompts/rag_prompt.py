@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from src.prompts.history import trim_history
+
 STALE_AFTER_DAYS = 365
+RAG_HISTORY_MESSAGES = 20
+RAG_HISTORY_MESSAGE_MAX_CHARS = 1500
 
 
 class RegisterEvidence(BaseModel):
@@ -136,8 +140,11 @@ def _build_user_content(question: str, contexts: list[dict]) -> str:
 def build_messages(
     question: str, contexts: list[dict], history: list[dict] | None = None
 ) -> list[dict]:
+    """Assemble the RAG prompt. History is bounded (tail + per-message cap) so a
+    long chat with verbose answers cannot grow the per-turn token cost without
+    limit or crowd out the retrieved CONTEXT the answer must be grounded in."""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        *(history or []),
+        *trim_history(history or [], RAG_HISTORY_MESSAGES, RAG_HISTORY_MESSAGE_MAX_CHARS),
         {"role": "user", "content": _build_user_content(question, contexts)},
     ]

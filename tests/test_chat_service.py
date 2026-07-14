@@ -6,7 +6,6 @@ import pytest
 from src.enums.response_status import ResponseStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.integrations.llm import LlmError
-from src.interfaces.qa_cache import question_key
 from src.models.category import Category
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
@@ -14,6 +13,7 @@ from src.models.knowledge_document import KnowledgeDocument
 from src.models.query import Query
 from src.models.response import Response as ResponseModel
 from src.prompts.condense_prompt import CondensedQuery
+from src.protocols.qa_cache import question_key
 from src.services.chat_service import ChatService
 from tests.conftest import FakeLlm, StubQaCache, StubVectorIndex, make_structured_partials
 
@@ -328,7 +328,7 @@ def test_ask_stream_propagates_llm_error_and_marks_response(session):
 
 
 def test_ask_stream_serves_from_cache_emits_citations_before_tokens(session):
-    from src.interfaces.qa_cache import question_key
+    from src.protocols.qa_cache import question_key
 
     doc = KnowledgeDocument(
         id="doc-cache",
@@ -376,7 +376,7 @@ def test_ask_stream_serves_from_cache_emits_citations_before_tokens(session):
 
 
 def test_ask_stream_cache_is_scoped_by_category(session):
-    from src.interfaces.qa_cache import question_key
+    from src.protocols.qa_cache import question_key
 
     session.add_all(
         [
@@ -472,3 +472,96 @@ def test_ask_stream_condense_failure_falls_back_to_raw_question(session):
     assert CondensedQuery in llm.structured_schemas
     assert index.last_query == "e na prática?"
     assert llm.embed_calls[-1] == ["e na prática?"]
+
+
+def _seed_doc1(session):
+    doc = KnowledgeDocument(id="doc-1", file_name="a.txt", category="documents")
+    session.add(doc)
+    session.commit()
+
+
+def test_ask_stream_invalid_cached_entry_regenerates_and_repairs_cache(session):
+    _seed_doc1(session)
+    cache = StubQaCache()
+    cache.store[question_key("Qual a meta?")] = {
+        "question": "Qual a meta?",
+        "answer": "",
+        "status": ResponseStatus.SUCCESS.value,
+        "citations": [{"document_id": "doc-1", "excerpt": "x", "confidence_score": 0.9}],
+    }
+    partials = make_structured_partials(
+        answer="A meta é 12 milhões.",
+        citations=[{"context_index": 0, "confidence": 0.9}],
+    )
+    llm = FakeLlm(structured_partials=partials)
+    svc = ChatService(session, StubVectorIndex(results=_contexts()), llm, cache)
+
+    events = _run_stream(svc, question="Qual a meta?")
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["status"] == ResponseStatus.SUCCESS.value
+    assert llm.embed_calls == [["Qual a meta?"]]
+    repaired = cache.store[question_key("Qual a meta?")]
+    assert repaired["answer"] == "A meta é 12 milhões."
+
+
+def test_ask_stream_cached_payload_with_malformed_citation_is_treated_as_miss(session):
+    _seed_doc1(session)
+    cache = StubQaCache()
+    cache.store[question_key("Qual a meta?")] = {
+        "question": "Qual a meta?",
+        "answer": "resposta antiga",
+        "status": ResponseStatus.SUCCESS.value,
+        "citations": [{"document_id": "doc-1"}],
+    }
+    partials = make_structured_partials(
+        answer="Nova resposta.", citations=[{"context_index": 0, "confidence": 0.9}]
+    )
+    llm = FakeLlm(structured_partials=partials)
+    svc = ChatService(session, StubVectorIndex(results=_contexts()), llm, cache)
+
+    events = _run_stream(svc, question="Qual a meta?")
+
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert tokens == "Nova resposta."
+    assert llm.embed_calls == [["Qual a meta?"]]
+
+
+def test_ask_stream_citations_without_answer_is_insufficient_and_not_cached(session):
+    _seed_doc1(session)
+    cache = StubQaCache()
+    partials = make_structured_partials(
+        answer="", citations=[{"context_index": 0, "confidence": 0.9}]
+    )
+    llm = FakeLlm(structured_partials=partials)
+    svc = ChatService(session, StubVectorIndex(results=_contexts()), llm, cache)
+
+    events = _run_stream(svc, question="Qual a meta?")
+
+    assert events[-1]["status"] == ResponseStatus.INSUFFICIENT_INFORMATION.value
+    assert cache.store == {}
+
+
+def test_ask_stream_skips_cache_write_when_invalidated_mid_request(session):
+    _seed_doc1(session)
+
+    class _InvalidatingIndex(StubVectorIndex):
+        def __init__(self, results, cache):
+            super().__init__(results=results)
+            self._cache_ref = cache
+
+        def search(self, query, n_results=5, embedding=None, category_id=None):
+            self._cache_ref.invalidate_all()
+            return super().search(query, n_results, embedding, category_id)
+
+    cache = StubQaCache()
+    index = _InvalidatingIndex(_contexts(), cache)
+    partials = make_structured_partials(
+        answer="Resposta.", citations=[{"context_index": 0, "confidence": 0.9}]
+    )
+    svc = ChatService(session, index, FakeLlm(structured_partials=partials), cache)
+
+    events = _run_stream(svc, question="Qual a meta?")
+
+    assert events[-1]["status"] == ResponseStatus.SUCCESS.value
+    assert cache.store == {}

@@ -1,4 +1,4 @@
-from src.interfaces.qa_cache import normalize_question, question_key
+from src.protocols.qa_cache import normalize_question, question_key
 from src.services.qa_cache import HybridQaCache
 
 
@@ -105,3 +105,17 @@ def test_invalidate_category_none_clears_everything(monkeypatch):
     assert cache.lookup_exact("q") is None
     assert cache.lookup_exact("q", "cat-a") is None
     assert cache.stats()["generation"] == gen0 + 1
+
+
+def test_put_with_stale_generation_is_skipped(monkeypatch):
+    cache = _make(monkeypatch)
+    stale = cache.generation()
+    cache.invalidate_category("cat-x")
+    cache.put("pergunta", [0.1] * 4, {"answer": "velha"}, generation=stale)
+    assert cache.lookup_exact("pergunta") is None
+
+
+def test_put_with_current_generation_is_stored(monkeypatch):
+    cache = _make(monkeypatch)
+    cache.put("pergunta", [0.1] * 4, {"answer": "nova"}, generation=cache.generation())
+    assert cache.lookup_exact("pergunta") == {"answer": "nova"}

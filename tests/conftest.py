@@ -21,10 +21,17 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from src.integrations.llm import LlmClient
-from src.interfaces.qa_cache import IQaCache, question_key
-from src.interfaces.vector_index_service import IVectorIndexService
-from src.models.base_model import Base
+from src.models.base import Base
 from src.prompts.condense_prompt import CondensedQuery
+from src.protocols.qa_cache import question_key
+from src.services.qa_cache import reset_qa_cache
+
+
+@pytest.fixture(autouse=True)
+def _fresh_qa_cache_singleton():
+    reset_qa_cache()
+    yield
+    reset_qa_cache()
 
 
 def make_structured_partials(
@@ -118,7 +125,7 @@ def fake_llm():
     return FakeLlm()
 
 
-class StubVectorIndex(IVectorIndexService):
+class StubVectorIndex:
     def __init__(self, results=None) -> None:
         self._results = results or []
         self.last_commit: dict | None = None
@@ -170,12 +177,16 @@ class StubVectorIndex(IVectorIndexService):
         return self._results
 
 
-class StubQaCache(IQaCache):
+class StubQaCache:
     def __init__(self) -> None:
         self.store: dict[str, dict] = {}
         self.semantic_hits: dict[str, dict] = {}
         self.invalidate_calls = 0
         self.invalidated_categories: list[str | None] = []
+        self._generation = 0
+
+    def generation(self):
+        return self._generation
 
     def lookup_exact(self, question, category_id=None):
         return self.store.get(question_key(question, category_id))
@@ -183,18 +194,22 @@ class StubQaCache(IQaCache):
     def lookup_semantic(self, question, embedding, category_id=None):
         return self.semantic_hits.get(question_key(question, category_id))
 
-    def put(self, question, embedding, payload, category_id=None):
+    def put(self, question, embedding, payload, category_id=None, generation=None):
+        if generation is not None and generation != self._generation:
+            return
         self.store[question_key(question, category_id)] = payload
 
     def invalidate_all(self):
         self.invalidate_calls += 1
         self.invalidated_categories.append(None)
+        self._generation += 1
         self.store.clear()
         self.semantic_hits.clear()
 
     def invalidate_category(self, category_id):
         self.invalidate_calls += 1
         self.invalidated_categories.append(category_id)
+        self._generation += 1
         if category_id is None:
             self.store.clear()
             self.semantic_hits.clear()

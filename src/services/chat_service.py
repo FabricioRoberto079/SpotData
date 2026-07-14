@@ -13,9 +13,6 @@ from src.data.postgres_client import get_session, transaction
 from src.enums.response_status import ResponseStatus
 from src.exceptions import NotFoundError, ValidationError
 from src.integrations.llm import LlmClient, LlmError, get_llm_client
-from src.interfaces.chat_service import IChatService
-from src.interfaces.qa_cache import IQaCache
-from src.interfaces.vector_index_service import IVectorIndexService
 from src.models.category import Category
 from src.models.chat import Chat
 from src.models.chat_folder import ChatFolder
@@ -26,6 +23,8 @@ from src.models.query import Query
 from src.models.response import Response as ResponseModel
 from src.prompts.condense_prompt import CondensedQuery, build_condense_messages
 from src.prompts.rag_prompt import RagAnswer, build_messages
+from src.protocols.qa_cache import QaCacheProtocol
+from src.protocols.vector_index_service import VectorIndexServiceProtocol
 from src.services.qa_cache import get_qa_cache
 from src.services.vector_index_service import get_vector_index_service
 
@@ -39,13 +38,13 @@ CONDENSE_MAX_TOKENS = 200
 MIN_CITATION_CONFIDENCE = 0.6
 
 
-class ChatService(IChatService):
+class ChatService:
     def __init__(
         self,
         session: Session,
-        vector_index: IVectorIndexService,
+        vector_index: VectorIndexServiceProtocol,
         llm_client: LlmClient,
-        cache: IQaCache,
+        cache: QaCacheProtocol,
     ) -> None:
         self._session = session
         self._vector_index = vector_index
@@ -303,6 +302,7 @@ class ChatService(IChatService):
         stmt = (
             select(Query)
             .where(Query.chat_id == chat_id)
+            .options(selectinload(Query.response))
             .order_by(Query.created_at.desc())
             .limit(CHAT_HISTORY_LIMIT)
         )
@@ -319,12 +319,24 @@ class ChatService(IChatService):
 
     @staticmethod
     def _is_valid_cached_payload(payload: dict) -> bool:
+        """Serve-side contract for cached payloads: grounded SUCCESS answers only,
+        with every citation carrying the fields `_serve_cached_stream` replays.
+        The shape check matters because L2 payloads are plain JSON persisted in
+        Postgres — they outlive deploys and schema evolution."""
         if payload.get("status") != ResponseStatus.SUCCESS.value:
             return False
         answer = (payload.get("answer") or "").strip()
         if not answer:
             return False
-        return bool(payload.get("citations"))
+        citations = payload.get("citations")
+        if not isinstance(citations, list) or not citations:
+            return False
+        return all(
+            isinstance(c, dict)
+            and isinstance(c.get("document_id"), str)
+            and isinstance(c.get("excerpt"), str)
+            for c in citations
+        )
 
     @staticmethod
     def _build_stream_cache_payload(question: str, answer: str, citations: list[dict]) -> dict:
@@ -482,6 +494,24 @@ class ChatService(IChatService):
             return rewritten.strip()
         return question
 
+    def _persist_interrupted(
+        self, response_row: ResponseModel, partial_answer: str, started: float
+    ) -> None:
+        """The client went away mid-stream (GeneratorExit/CancelledError): persist
+        what was actually delivered so the turn doesn't silently vanish from the
+        chat history. A partial answer is a truthful grounded prefix the user saw,
+        so it keeps SUCCESS; with nothing delivered the placeholder stays ERROR."""
+        response_id = response_row.id
+        elapsed = int((time.perf_counter() - started) * 1000)
+        try:
+            with transaction(self._session):
+                response_row.response_text = partial_answer
+                if partial_answer:
+                    response_row.status = ResponseStatus.SUCCESS.value
+                response_row.time_ms = elapsed
+        except Exception:
+            logger.exception("failed to persist interrupted stream %s", response_id)
+
     async def ask_stream(
         self,
         question: str,
@@ -506,6 +536,8 @@ class ChatService(IChatService):
 
         question_embedding: list[float] | None = None
         cached = self._cache.lookup_exact(search_question, scope_category_id)
+        if cached is not None and not self._is_valid_cached_payload(cached):
+            cached = None
         if cached is None:
             embeds = await asyncio.to_thread(self._llm.embed, [search_question])
             question_embedding = embeds[0]
@@ -515,13 +547,16 @@ class ChatService(IChatService):
                 question_embedding,
                 scope_category_id,
             )
-        if cached is not None and self._is_valid_cached_payload(cached):
+            if cached is not None and not self._is_valid_cached_payload(cached):
+                cached = None
+        if cached is not None:
             async for event in self._serve_cached_stream(
                 question, cached, user_id, chat_id, started, scope_category_id
             ):
                 yield event
             return
 
+        cache_generation = self._cache.generation()
         contexts = await asyncio.to_thread(
             self._vector_index.search,
             search_question,
@@ -540,118 +575,127 @@ class ChatService(IChatService):
             response_row = ResponseModel(
                 query_id=query_row.id,
                 response_text="",
-                status=ResponseStatus.SUCCESS.value,
+                status=ResponseStatus.ERROR.value,
                 time_ms=0,
             )
             self._session.add(response_row)
             self._session.flush()
+        response_id = response_row.id
 
-            yield {
-                "type": "meta",
-                "chat_id": chat_id,
-                "query_id": query_row.id,
-                "response_id": response_row.id,
-            }
+        yield {
+            "type": "meta",
+            "chat_id": chat_id,
+            "query_id": query_row.id,
+            "response_id": response_id,
+        }
 
-            if not contexts:
-                async for event in self._finalize_insufficient(response_row, started):
-                    yield event
-                return
+        if not contexts:
+            async for event in self._finalize_insufficient(response_row, started):
+                yield event
+            return
 
-            rag_messages = build_messages(question, contexts, history)
+        rag_messages = build_messages(question, contexts, history)
 
-            answer_parts: list[str] = []
-            prev_answer = ""
-            last_partial: dict | None = None
-            citations_processed = False
-            citations_emitted = False
-            citations_payload: list[dict] = []
+        answer_parts: list[str] = []
+        prev_answer = ""
+        last_partial: dict | None = None
+        citations_processed = False
+        citations_emitted = False
+        citations_payload: list[dict] = []
 
-            try:
-                async for snapshot in self._llm.chat_stream_structured(rag_messages, RagAnswer):
-                    last_partial = snapshot
+        try:
+            async for snapshot in self._llm.chat_stream_structured(rag_messages, RagAnswer):
+                last_partial = snapshot
 
-                    if not citations_processed and "answer" in snapshot:
-                        raw_citations = snapshot.get("citations") or []
+                if not citations_processed and "answer" in snapshot:
+                    raw_citations = snapshot.get("citations") or []
+                    with transaction(self._session):
                         citations_payload = self._build_and_persist_citations(
-                            raw_citations, contexts, response_row.id
+                            raw_citations, contexts, response_id
                         )
-                        citations_processed = True
-                        if not citations_payload:
-                            break
-                        yield {"type": "citations", "citations": citations_payload}
-                        citations_emitted = True
+                    citations_processed = True
+                    if not citations_payload:
+                        break
+                    yield {"type": "citations", "citations": citations_payload}
+                    citations_emitted = True
 
-                    current_answer = snapshot.get("answer")
-                    if not isinstance(current_answer, str):
-                        continue
-                    if len(current_answer) > len(prev_answer):
-                        delta = current_answer[len(prev_answer) :]
-                        prev_answer = current_answer
-                        answer_parts.append(delta)
-                        yield {"type": "token", "content": delta}
-            except LlmError as exc:
-                elapsed = int((time.perf_counter() - started) * 1000)
+                current_answer = snapshot.get("answer")
+                if not isinstance(current_answer, str):
+                    continue
+                if len(current_answer) > len(prev_answer):
+                    delta = current_answer[len(prev_answer) :]
+                    prev_answer = current_answer
+                    answer_parts.append(delta)
+                    yield {"type": "token", "content": delta}
+        except LlmError as exc:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            with transaction(self._session):
                 response_row.response_text = f"Error generating response ({exc.kind}): {exc.detail}"
                 response_row.status = ResponseStatus.ERROR.value
                 response_row.time_ms = elapsed
-                self._session.commit()
-                logger.warning(
-                    "stream %s LLM failed kind=%s detail=%s",
-                    query_row.id,
-                    exc.kind,
-                    exc.detail,
-                )
-                yield {"type": "error", "kind": exc.kind, "message": exc.detail}
-                return
+            logger.warning(
+                "stream %s LLM failed kind=%s detail=%s",
+                query_row.id,
+                exc.kind,
+                exc.detail,
+            )
+            yield {"type": "error", "kind": exc.kind, "message": exc.detail}
+            return
+        except BaseException:
+            self._persist_interrupted(response_row, "".join(answer_parts), started)
+            raise
 
-            last_answer = "".join(answer_parts)
+        last_answer = "".join(answer_parts)
 
-            if not citations_processed:
-                raw_citations = (last_partial or {}).get("citations") or []
+        if not citations_processed:
+            raw_citations = (last_partial or {}).get("citations") or []
+            with transaction(self._session):
                 citations_payload = self._build_and_persist_citations(
-                    raw_citations, contexts, response_row.id
+                    raw_citations, contexts, response_id
                 )
-                citations_processed = True
+            citations_processed = True
 
-            if not last_answer and not citations_payload:
-                async for event in self._finalize_insufficient(
-                    response_row,
-                    started,
-                    skip_citations_event=citations_emitted,
-                ):
-                    yield event
-                return
+        if not last_answer or not citations_payload:
+            async for event in self._finalize_insufficient(
+                response_row,
+                started,
+                skip_citations_event=citations_emitted,
+            ):
+                yield event
+            return
 
+        elapsed = int((time.perf_counter() - started) * 1000)
+        with transaction(self._session):
             response_row.response_text = last_answer
             response_row.status = ResponseStatus.SUCCESS.value
-            elapsed = int((time.perf_counter() - started) * 1000)
             response_row.time_ms = elapsed
-            self._session.commit()
 
-            if not citations_emitted:
-                yield {"type": "citations", "citations": citations_payload}
-            yield {
-                "type": "done",
-                "status": response_row.status,
-                "time_ms": elapsed,
-            }
+        if not citations_emitted:
+            yield {"type": "citations", "citations": citations_payload}
+        yield {
+            "type": "done",
+            "status": ResponseStatus.SUCCESS.value,
+            "time_ms": elapsed,
+        }
 
-            if question_embedding is not None:
+        if question_embedding is not None:
+            payload = self._build_stream_cache_payload(
+                search_question, last_answer, citations_payload
+            )
+            if self._is_valid_cached_payload(payload):
                 self._cache.put(
                     search_question,
                     question_embedding,
-                    self._build_stream_cache_payload(
-                        search_question, last_answer, citations_payload
-                    ),
+                    payload,
                     scope_category_id,
+                    generation=cache_generation,
                 )
 
 
 def get_chat_service(
     session: Session = Depends(get_session),
-    vector_index: IVectorIndexService = Depends(get_vector_index_service),
+    vector_index: VectorIndexServiceProtocol = Depends(get_vector_index_service),
     llm: LlmClient = Depends(get_llm_client),
-    cache: IQaCache = Depends(get_qa_cache),
-) -> IChatService:
+    cache: QaCacheProtocol = Depends(get_qa_cache),
+) -> ChatService:
     return ChatService(session, vector_index, llm, cache)

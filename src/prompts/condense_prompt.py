@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from src.prompts.history import trim_history
+
 CONDENSE_HISTORY_MESSAGES = 6
 CONDENSE_MESSAGE_MAX_CHARS = 300
 
@@ -30,19 +32,12 @@ class CondensedQuery(BaseModel):
     )
 
 
-def _trim_message(message: dict) -> dict:
-    content = message.get("content") or ""
-    if len(content) <= CONDENSE_MESSAGE_MAX_CHARS:
-        return message
-    return {**message, "content": content[:CONDENSE_MESSAGE_MAX_CHARS].rstrip() + "…"}
-
-
 def build_condense_messages(history: list[dict], question: str) -> list[dict]:
     """Assemble the condense prompt from the tail of the history, truncating
     long messages: resolving a follow-up's references needs the recent topic,
     not full past answers, and the call's latency is dominated by input tokens."""
     return [
         {"role": "system", "content": CONDENSE_SYSTEM_PROMPT},
-        *(_trim_message(m) for m in history[-CONDENSE_HISTORY_MESSAGES:]),
+        *trim_history(history, CONDENSE_HISTORY_MESSAGES, CONDENSE_MESSAGE_MAX_CHARS),
         {"role": "user", "content": question},
     ]
